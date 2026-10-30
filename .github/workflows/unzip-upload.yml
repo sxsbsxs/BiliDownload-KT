@@ -8,12 +8,19 @@ on:
         required: true
         default: "main"
 
+  push:
+    branches:
+      - main
+    paths:
+      - "BiliDownload-KT.zip"
+      - "incoming/*.zip"
+
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: unzip-${{ github.repository }}-${{ inputs.branch }}
+  group: unzip-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,10 +29,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
           fetch-depth: 0
 
       - name: Extract uploaded ZIP files
@@ -48,7 +55,6 @@ jobs:
               archives.extend(incoming.glob("*.zip"))
 
           archives.extend(root.glob("*.zip"))
-
           archives = sorted(set(archives))
 
           if not archives:
@@ -104,7 +110,7 @@ jobs:
                       target = root.joinpath(*parts).resolve()
 
                       if target != root and root not in target.parents:
-                          raise Exception("Invalid extraction path: " + str(target))
+                          raise Exception("Invalid extraction path")
 
                       target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -139,13 +145,13 @@ jobs:
           for file in "${required_files[@]}"; do
             if [ ! -f "$file" ]; then
               echo "MISSING: $file"
-              echo "Android project not found at repository root."
               exit 1
             fi
             echo "FOUND: $file"
           done
 
       - name: Commit extracted files
+        id: commit
         shell: bash
         run: |
           set -euo pipefail
@@ -157,17 +163,20 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           git commit -m "Auto extract BiliDownload-KT project"
-          git push origin "HEAD:${{ inputs.branch }}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Trigger APK build
+        if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
           gh workflow run build-helper.yml \
-            --ref "${{ inputs.branch }}"
+            --ref "${GITHUB_REF_NAME}"
