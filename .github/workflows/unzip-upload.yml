@@ -1,0 +1,139 @@
+name: Auto Unzip Uploaded Folder
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Target branch"
+        required: true
+        default: "main"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unzip-${{ github.repository }}-${{ inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  unzip:
+    name: Extract ZIP and Commit
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Extract uploaded ZIP files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import pathlib
+          import zipfile
+          import shutil
+          import stat
+
+          root = pathlib.Path(".").resolve()
+          incoming = root / "incoming"
+
+          if not incoming.exists():
+              print("No incoming directory.")
+              raise SystemExit(0)
+
+          archives = sorted(incoming.glob("*.zip"))
+
+          if not archives:
+              print("No ZIP files found.")
+              raise SystemExit(0)
+
+          total = 0
+
+          for archive in archives:
+              print("Processing:", archive.name)
+
+              with zipfile.ZipFile(archive) as z:
+                  entries = []
+
+                  for item in z.infolist():
+                      name = item.filename.replace("\\", "/")
+                      path = pathlib.PurePosixPath(name)
+
+                      if path.is_absolute() or ".." in path.parts:
+                          raise Exception("Unsafe ZIP path: " + name)
+
+                      if not path.parts:
+                          continue
+
+                      mode = item.external_attr >> 16
+
+                      if stat.S_ISLNK(mode):
+                          raise Exception("Symbolic link rejected: " + name)
+
+                      entries.append((item, path))
+
+                  # Detect a single top-level BiliDownload-KT folder.
+                  top_levels = {
+                      path.parts[0]
+                      for item, path in entries
+                  }
+
+                  strip_prefix = (
+                      len(top_levels) == 1
+                      and next(iter(top_levels)) == "BiliDownload-KT"
+                  )
+
+                  print("Remove BiliDownload-KT top folder:", strip_prefix)
+
+                  for item, path in entries:
+                      if item.is_dir():
+                          continue
+
+                      parts = path.parts[1:] if strip_prefix else path.parts
+
+                      if not parts:
+                          continue
+
+                      target = root.joinpath(*parts).resolve()
+
+                      if target != root and root not in target.parents:
+                          raise Exception("Invalid extraction path: " + str(target))
+
+                      target.parent.mkdir(parents=True, exist_ok=True)
+
+                      with z.open(item) as src:
+                          with open(target, "wb") as dst:
+                              shutil.copyfileobj(src, dst)
+
+                      total += 1
+
+                      if total > 20000:
+                          raise Exception("Too many files")
+
+              archive.unlink()
+              print("Deleted ZIP:", archive.name)
+
+          print("Successfully extracted:", total, "files")
+          PY
+
+      - name: Commit extracted files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Auto extract uploaded ZIP"
+          git push origin "HEAD:${{ inputs.branch }}"
