@@ -25,12 +25,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      # 1. 获取仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || github.ref_name }}
           fetch-depth: 0
 
+      # 2. 自动寻找 ZIP、识别项目根目录并解压
       - name: Extract ZIP files
         id: extract
         shell: bash
@@ -58,6 +60,17 @@ jobs:
               print("No ZIP files found.")
               raise SystemExit(0)
 
+          required = [
+              "settings.gradle",
+              "settings.gradle.kts",
+              "build.gradle",
+              "build.gradle.kts",
+              "gradle.properties",
+              "app/build.gradle",
+              "app/build.gradle.kts",
+              "app/src/main/AndroidManifest.xml"
+          ]
+
           total = 0
 
           for archive in archives:
@@ -70,7 +83,11 @@ jobs:
                       name = item.filename.replace("\\", "/")
                       path = pathlib.PurePosixPath(name)
 
-                      if path.is_absolute() or ".." in path.parts:
+                      if (
+                          path.is_absolute()
+                          or ".." in path.parts
+                          or (path.parts and ":" in path.parts[0])
+                      ):
                           raise Exception("Unsafe ZIP path: " + name)
 
                       if not path.parts:
@@ -83,67 +100,96 @@ jobs:
 
                       entries.append((item, path))
 
-                  # Find the actual Android project root.
-                  required = {
-                      "settings.gradle",
-                      "build.gradle",
-                      "gradle.properties"
+                  available = {
+                      str(path)
+                      for item, path in entries
+                      if not item.is_dir()
                   }
 
+                  # 查找真正的 Android 项目根目录
                   project_roots = set()
 
                   for item, path in entries:
-                      if path.name != "settings.gradle":
+                      if path.name not in (
+                          "settings.gradle",
+                          "settings.gradle.kts"
+                      ):
                           continue
 
                       parent = path.parent
 
-                      available = {
-                          p
-                          for other_item, p in entries
-                      }
+                      checks = [
+                          (parent / "build.gradle").as_posix(),
+                          (parent / "build.gradle.kts").as_posix(),
+                          (parent / "gradle.properties").as_posix(),
+                          (parent / "app/build.gradle").as_posix(),
+                          (parent / "app/build.gradle.kts").as_posix(),
+                          (parent / "app/src/main/AndroidManifest.xml").as_posix()
+                      ]
 
-                      if all(parent / name in available for name in required):
-                          project_roots.add(parent)
+                      has_root_build = (
+                          checks[0] in available
+                          or checks[1] in available
+                      )
 
-                  if len(project_roots) == 1:
-                      project_root = next(iter(project_roots))
-                      print("Detected project root:", project_root)
-                  else:
-                      # Fallback: remove one BiliDownload-KT top-level folder.
-                      top_levels = {
-                          path.parts[0]
-                          for item, path in entries
-                      }
+                      has_app_build = (
+                          checks[3] in available
+                          or checks[4] in available
+                      )
 
                       if (
-                          len(top_levels) == 1
-                          and next(iter(top_levels)) == "BiliDownload-KT"
+                          has_root_build
+                          and checks[2] in available
+                          and has_app_build
+                          and checks[5] in available
                       ):
-                          project_root = pathlib.PurePosixPath("BiliDownload-KT")
-                      else:
-                          project_root = pathlib.PurePosixPath(".")
+                          project_roots.add(parent)
 
-                      print("Using fallback root:", project_root)
+                  if len(project_roots) == 0:
+                      print("Could not detect a complete Android project.")
+                      print("settings.gradle files found:")
 
+                      for item, path in entries:
+                          if path.name in (
+                              "settings.gradle",
+                              "settings.gradle.kts"
+                          ):
+                              print(" -", path)
+
+                      raise Exception(
+                          "Android project root not found in ZIP."
+                      )
+
+                  if len(project_roots) > 1:
+                      raise Exception(
+                          "Multiple Android project roots found: "
+                          + str(project_roots)
+                      )
+
+                  project_root = next(iter(project_roots))
+
+                  print("Detected Android project root:", project_root)
+
+                  # 只解压项目根目录以内的文件
                   for item, path in entries:
                       if item.is_dir():
                           continue
 
-                      if project_root.parts:
-                          if path.parts[:len(project_root.parts)] != project_root.parts:
-                              continue
-                          parts = path.parts[len(project_root.parts):]
-                      else:
-                          parts = path.parts
+                      if path.parts[:len(project_root.parts)] != project_root.parts:
+                          continue
+
+                      parts = path.parts[len(project_root.parts):]
 
                       if not parts:
                           continue
 
-                      target = root.joinpath(*parts).resolve()
+                      target = root.joinpath(*parts)
 
-                      if target != root and root not in target.parents:
-                          raise Exception("Invalid extraction path")
+                      # 防止路径逃逸
+                      resolved = target.resolve()
+
+                      if resolved != root and root not in resolved.parents:
+                          raise Exception("Invalid extraction path: " + str(target))
 
                       target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -154,14 +200,16 @@ jobs:
                       total += 1
 
                       if total > 20000:
-                          raise Exception("Too many files")
+                          raise Exception("Too many files in ZIP.")
 
+              # 解压成功后删除 ZIP
               archive.unlink()
               print("Deleted ZIP:", archive.name)
 
           print("Successfully extracted:", total, "files")
           PY
 
+      # 3. 检查 Android 项目文件
       - name: Check Android project
         shell: bash
         run: |
@@ -171,22 +219,35 @@ jobs:
           find . -maxdepth 5 -type f \
             ! -path "./.git/*" | sort
 
-          required_files=(
-            settings.gradle
-            build.gradle
-            gradle.properties
-            app/build.gradle
-            app/src/main/AndroidManifest.xml
-          )
+          # 支持 Groovy 和 Kotlin DSL
+          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
+            echo "MISSING: settings.gradle or settings.gradle.kts"
+            exit 1
+          fi
 
-          for file in "${required_files[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "MISSING: $file"
-              exit 1
-            fi
-            echo "FOUND: $file"
-          done
+          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
+            echo "MISSING: build.gradle or build.gradle.kts"
+            exit 1
+          fi
 
+          if [ ! -f "gradle.properties" ]; then
+            echo "MISSING: gradle.properties"
+            exit 1
+          fi
+
+          if [ ! -f "app/build.gradle" ] && [ ! -f "app/build.gradle.kts" ]; then
+            echo "MISSING: app/build.gradle or app/build.gradle.kts"
+            exit 1
+          fi
+
+          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
+            echo "MISSING: app/src/main/AndroidManifest.xml"
+            exit 1
+          fi
+
+          echo "All Android project files found."
+
+      # 4. 自动提交解压后的项目
       - name: Commit extracted files
         id: commit
         shell: bash
@@ -204,9 +265,11 @@ jobs:
           else
             git commit -m "Auto extract BiliDownload-KT project"
             git push origin "HEAD:${GITHUB_REF_NAME}"
+
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # 5. 自动触发 APK 构建
       - name: Trigger APK build
         if: steps.commit.outputs.changed == 'true'
         env:
