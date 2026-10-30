@@ -42,20 +42,23 @@ jobs:
           root = pathlib.Path(".").resolve()
           incoming = root / "incoming"
 
-          if not incoming.exists():
-              print("No incoming directory.")
-              raise SystemExit(0)
+          archives = []
 
-          archives = sorted(incoming.glob("*.zip"))
+          if incoming.exists():
+              archives.extend(incoming.glob("*.zip"))
+
+          archives.extend(root.glob("*.zip"))
+
+          archives = sorted(set(archives))
 
           if not archives:
               print("No ZIP files found.")
-              raise SystemExit(0)
+              raise SystemExit(1)
 
           total = 0
 
           for archive in archives:
-              print("Processing:", archive.name)
+              print("Processing:", archive.relative_to(root))
 
               with zipfile.ZipFile(archive) as z:
                   entries = []
@@ -120,6 +123,28 @@ jobs:
           print("Successfully extracted:", total, "files")
           PY
 
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            settings.gradle
+            build.gradle
+            gradle.properties
+            app/build.gradle
+            app/src/main/AndroidManifest.xml
+          )
+
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "MISSING: $file"
+              echo "Android project not found at repository root."
+              exit 1
+            fi
+            echo "FOUND: $file"
+          done
+
       - name: Commit extracted files
         shell: bash
         run: |
@@ -135,7 +160,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Auto extract uploaded ZIP"
+          git commit -m "Auto extract BiliDownload-KT project"
           git push origin "HEAD:${{ inputs.branch }}"
 
       - name: Trigger APK build
