@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: unzip-${{ github.repository }}-${{ inputs.branch }}
@@ -76,7 +77,6 @@ jobs:
 
                       entries.append((item, path))
 
-                  # Detect a single top-level BiliDownload-KT folder.
                   top_levels = {
                       path.parts[0]
                       for item, path in entries
@@ -137,3 +137,12 @@ jobs:
 
           git commit -m "Auto extract uploaded ZIP"
           git push origin "HEAD:${{ inputs.branch }}"
+
+      - name: Trigger APK build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run build-helper.yml \
+            --ref "${{ inputs.branch }}"
