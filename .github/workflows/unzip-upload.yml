@@ -1,38 +1,4 @@
-name: Auto Unzip Uploaded Folder
-
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-    inputs:
-      branch:
-        description: "Target branch"
-        required: true
-        default: "main"
-
-permissions:
-  contents: write
-  actions: write
-
-concurrency:
-  group: unzip-${{ github.repository }}-${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-  unzip:
-    name: Extract ZIP and Commit
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch || github.ref_name }}
-          fetch-depth: 0
-
-      - name: Extract ZIP files
-        id: extract
+- name: Extract ZIP files
         shell: bash
         run: |
           set -euo pipefail
@@ -42,29 +8,31 @@ jobs:
           import zipfile
           import shutil
           import stat
+          import tempfile
 
           root = pathlib.Path(".").resolve()
           incoming = root / "incoming"
 
           archives = []
-
           if incoming.exists():
               archives.extend(incoming.glob("*.zip"))
-
           archives.extend(root.glob("*.zip"))
           archives = sorted(set(archives))
 
           if not archives:
-              print("No ZIP files found.")
-              raise SystemExit(0)
+              raise SystemExit("No ZIP files found.")
 
-          total = 0
+          required = {
+              "settings.gradle",
+              "build.gradle",
+              "gradle.properties"
+          }
 
           for archive in archives:
-              print("Processing:", archive.relative_to(root))
+              print("Processing:", archive.name)
 
               with zipfile.ZipFile(archive) as z:
-                  entries = []
+                  files = {}
 
                   for item in z.infolist():
                       name = item.filename.replace("\\", "/")
@@ -73,106 +41,56 @@ jobs:
                       if path.is_absolute() or ".." in path.parts:
                           raise Exception("Unsafe ZIP path: " + name)
 
-                      if not path.parts:
+                      if not path.parts or item.is_dir():
                           continue
 
                       mode = item.external_attr >> 16
-
                       if stat.S_ISLNK(mode):
                           raise Exception("Symbolic link rejected: " + name)
 
-                      entries.append((item, path))
+                      files[path] = item
 
-                  top_levels = {
-                      path.parts[0]
-                      for item, path in entries
-                  }
+                  # Locate Android project root at any directory depth.
+                  project_roots = set()
 
-                  strip_prefix = (
-                      len(top_levels) == 1
-                      and next(iter(top_levels)) == "BiliDownload-KT"
-                  )
+                  for path in files:
+                      if path.name in required:
+                          parent = path.parent
+                          if all(
+                              parent / filename in files
+                              for filename in required
+                          ):
+                              project_roots.add(parent)
 
-                  print("Remove BiliDownload-KT folder:", strip_prefix)
+                  if len(project_roots) != 1:
+                      raise Exception(
+                          "Could not identify exactly one Android project root. "
+                          "Found: " + str(project_roots)
+                      )
 
-                  for item, path in entries:
-                      if item.is_dir():
+                  project_root = next(iter(project_roots))
+                  print("Android project root inside ZIP:", project_root)
+
+                  for path, item in files.items():
+                      if project_root.parts and path.parts[:len(project_root.parts)] != project_root.parts:
                           continue
 
-                      parts = path.parts[1:] if strip_prefix else path.parts
-
-                      if not parts:
+                      relative = path.relative_to(project_root)
+                      if not relative.parts:
                           continue
 
-                      target = root.joinpath(*parts).resolve()
+                      target = (root / pathlib.Path(*relative.parts)).resolve()
 
                       if target != root and root not in target.parents:
                           raise Exception("Invalid extraction path")
 
                       target.parent.mkdir(parents=True, exist_ok=True)
 
-                      with z.open(item) as src:
-                          with open(target, "wb") as dst:
-                              shutil.copyfileobj(src, dst)
-
-                      total += 1
-
-                      if total > 20000:
-                          raise Exception("Too many files")
+                      with z.open(item) as src, open(target, "wb") as dst:
+                          shutil.copyfileobj(src, dst)
 
               archive.unlink()
               print("Deleted ZIP:", archive.name)
 
-          print("Successfully extracted:", total, "files")
+          print("Extraction completed.")
           PY
-
-      - name: Check Android project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          required_files=(
-            settings.gradle
-            build.gradle
-            gradle.properties
-            app/build.gradle
-            app/src/main/AndroidManifest.xml
-          )
-
-          for file in "${required_files[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "MISSING: $file"
-              exit 1
-            fi
-            echo "FOUND: $file"
-          done
-
-      - name: Commit extracted files
-        id: commit
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add -A
-
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes to commit."
-          else
-            git commit -m "Auto extract BiliDownload-KT project"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Trigger APK build
-        if: steps.commit.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          gh workflow run build-helper.yml \
-            --ref "${GITHUB_REF_NAME}"
