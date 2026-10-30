@@ -1,19 +1,15 @@
 name: Auto Unzip Uploaded Folder
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       branch:
         description: "Target branch"
         required: true
         default: "main"
-
-  push:
-    branches:
-      - main
-    paths:
-      - "BiliDownload-KT.zip"
-      - "incoming/*.zip"
 
 permissions:
   contents: write
@@ -29,13 +25,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || github.ref_name }}
           fetch-depth: 0
 
-      - name: Extract uploaded ZIP files
+      - name: Extract ZIP files
+        id: extract
         shell: bash
         run: |
           set -euo pipefail
@@ -59,7 +56,7 @@ jobs:
 
           if not archives:
               print("No ZIP files found.")
-              raise SystemExit(1)
+              raise SystemExit(0)
 
           total = 0
 
@@ -96,7 +93,7 @@ jobs:
                       and next(iter(top_levels)) == "BiliDownload-KT"
                   )
 
-                  print("Remove BiliDownload-KT top folder:", strip_prefix)
+                  print("Remove BiliDownload-KT folder:", strip_prefix)
 
                   for item, path in entries:
                       if item.is_dir():
@@ -129,7 +126,7 @@ jobs:
           print("Successfully extracted:", total, "files")
           PY
 
-      - name: Verify Android project
+      - name: Check Android project
         shell: bash
         run: |
           set -euo pipefail
@@ -162,14 +159,13 @@ jobs:
           git add -A
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "No changes to commit."
+          else
+            git commit -m "Auto extract BiliDownload-KT project"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-
-          git commit -m "Auto extract BiliDownload-KT project"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Trigger APK build
         if: steps.commit.outputs.changed == 'true'
