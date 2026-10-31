@@ -39,6 +39,7 @@ data class PlayStreams(
     val acceptedQualities: List<StreamChoice>,
     val videoBackups: List<String> = emptyList(),
     val audioBackups: List<String> = emptyList(),
+    val progressiveBackups: List<String> = emptyList(),
     val format: String = "dash"
 )
 

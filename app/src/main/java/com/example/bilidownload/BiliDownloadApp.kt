@@ -12,6 +12,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,14 +27,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
 import com.example.bilidownload.download.StreamDownloader
+import com.example.bilidownload.download.DownloadWork
+import com.example.bilidownload.download.DownloadHistoryStore
+import com.example.bilidownload.download.DownloadHistoryEntry
+import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -106,21 +125,44 @@ fun BiliDownloadApp(api: BiliApi, downloader: StreamDownloader, vault: CookieVau
 
     MaterialTheme(
         colorScheme = lightColorScheme(
-            primary = androidx.compose.ui.graphics.Color(0xFFE83E70),
-            secondary = androidx.compose.ui.graphics.Color(0xFFF7DCE5),
-            background = androidx.compose.ui.graphics.Color(0xFFF7F5F7),
-            surface = androidx.compose.ui.graphics.Color.White
+            primary = Color(0xFF168FC2),
+            onPrimary = Color.White,
+            secondary = Color(0xFFE5F5FC),
+            onSecondary = Color(0xFF15536D),
+            background = Color(0xFFF4F7FA),
+            surface = Color.White,
+            surfaceVariant = Color(0xFFEAF0F5),
+            onSurface = Color(0xFF18232D),
+            onSurfaceVariant = Color(0xFF637381),
+            outline = Color(0xFFD8E1E8)
+        ),
+        shapes = Shapes(
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(20.dp),
+            large = RoundedCornerShape(28.dp)
         )
     ) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    tonalElevation = 8.dp
+                ) {
                     AppTab.entries.forEach { item ->
                         NavigationBarItem(
                             selected = tab == item,
                             onClick = { tab = item },
-                            icon = { Text(when (item) { AppTab.HOME -> "⌂"; AppTab.DOWNLOADS -> "↓"; AppTab.SYNC -> "↻"; AppTab.PROFILE -> "●" }) },
+                            icon = {
+                                val image = when (item) {
+                                    AppTab.HOME -> Icons.Filled.Home
+                                    AppTab.DOWNLOADS -> Icons.Filled.Download
+                                    AppTab.SYNC -> Icons.Filled.Sync
+                                    AppTab.PROFILE -> Icons.Filled.Person
+                                }
+                                Icon(image, contentDescription = item.label)
+                            },
                             label = { Text(item.label) }
                         )
                     }
@@ -172,14 +214,21 @@ private fun HomePage(
     onOpenProfile: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var info by remember { mutableStateOf<VideoInfo?>(null) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var selectedPage by remember { mutableIntStateOf(0) }
     var allPages by remember { mutableStateOf(false) }
     var qualities by remember { mutableStateOf(emptyList<StreamChoice>()) }
+    var qualityLoading by remember { mutableStateOf(false) }
     var quality by remember { mutableIntStateOf(80) }
     var mode by remember { mutableStateOf(SaveMode.VIDEO) }
     var modeMenu by remember { mutableStateOf(false) }
     var qualityMenu by remember { mutableStateOf(false) }
+    var subtitleTracks by remember { mutableStateOf(emptyList<SubtitleTrack>()) }
+    var selectedSubtitleLanguage by remember { mutableStateOf("") }
+    var subtitleMenu by remember { mutableStateOf(false) }
+    var subtitleLoading by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("粘贴 BV / AV / 视频链接或 b23.tv 短链开始解析。") }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -196,21 +245,17 @@ private fun HomePage(
         showPlayer = false
         scope.launch {
             try {
-                val parsed = withContext(Dispatchers.IO) { api.getVideoInfo(input, cookie) }
+                val parsed = withContext(Dispatchers.IO) { api.getVideoInfo(PythonBridge.normalizeVideoInput(input), cookie) }
                 val pages = if (parsed.pages.isNotEmpty()) parsed.pages else listOf(VideoPage(parsed.cid, 1, parsed.title, parsed.durationSeconds))
                 val normalized = parsed.copy(pages = pages)
                 info = normalized
                 selectedPage = 0
                 allPages = false
-                try {
-                    val streams = withContext(Dispatchers.IO) { api.getPlayStreams(normalized, pages.first().cid, 127, cookie) }
-                    qualities = streams.acceptedQualities
-                    quality = qualities.firstOrNull()?.quality ?: 80
-                    status = "解析成功：${pages.size} 个分P，已读取接口实际返回的画质。"
-                } catch (q: Exception) {
-                    qualities = emptyList(); quality = 80
-                    status = "视频信息已解析；游客画质列表暂不可用（${q.message ?: "接口限制"}），仍可尝试下载。"
-                }
+                subtitleTracks = emptyList()
+                selectedSubtitleLanguage = ""
+                qualities = emptyList()
+                quality = 80
+                status = "解析成功：${pages.size} 个分P。画质列表将在你打开画质选项时再读取。"
                 if (autoPlay) showPlayer = true
             } catch (e: Exception) {
                 info = null; qualities = emptyList()
@@ -224,19 +269,44 @@ private fun HomePage(
         allPages = false
         val current = info ?: return
         val page = current.pages.getOrNull(index) ?: return
+        qualities = emptyList()
+        quality = 80
+        if (mode == SaveMode.SUBTITLE) {
+            subtitleLoading = true
+            scope.launch {
+                try {
+                    val tracks = withContext(Dispatchers.IO) { api.getSubtitleTracks(current, page.cid, cookie) }
+                    subtitleTracks = tracks
+                    if (tracks.none { it.language == selectedSubtitleLanguage }) {
+                        selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
+                    }
+                } catch (e: Exception) {
+                    subtitleTracks = emptyList()
+                    status = "读取字幕列表失败：${e.message ?: "接口暂不可用"}"
+                } finally {
+                    subtitleLoading = false
+                }
+            }
+        }
+        status = "已切换到 P${page.page}。需要选择画质时再读取该分P的画质列表。"
+    }
+
+    fun loadSubtitleTracks() {
+        val video = info ?: return
+        val page = currentPage ?: return
+        subtitleLoading = true
         scope.launch {
             try {
-                val streams = withContext(Dispatchers.IO) {
-                    api.getPlayStreams(current, page.cid, 127, cookie)
+                val tracks = withContext(Dispatchers.IO) { api.getSubtitleTracks(video, page.cid, cookie) }
+                subtitleTracks = tracks
+                if (tracks.none { it.language == selectedSubtitleLanguage }) {
+                    selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
                 }
-                qualities = streams.acceptedQualities
-                quality = qualities.firstOrNull()?.quality ?: 80
-                status = "已切换到 P${page.page}，已更新该分P实际可用画质。"
+                status = if (tracks.isEmpty()) "当前分P没有公开字幕" else "找到 ${tracks.size} 条字幕轨道"
             } catch (e: Exception) {
-                qualities = emptyList()
-                quality = 80
-                status = "已切换到 P${page.page}，画质列表暂不可用；仍可尝试下载。"
-            }
+                subtitleTracks = emptyList()
+                status = "读取字幕列表失败：${e.message ?: "接口暂不可用"}"
+            } finally { subtitleLoading = false }
         }
     }
 
@@ -245,75 +315,43 @@ private fun HomePage(
         if (busy) return
         val pages = if (allPages) video.pages else listOfNotNull(currentPage)
         if (pages.isEmpty()) { status = "请先选择有效分P"; return }
-        busy = true; cancelFlag = false; progress = 0f; status = "准备下载…"
-        scope.launch {
-            val failures = mutableListOf<String>()
-            val successes = mutableListOf<String>()
-            try {
-                pages.forEachIndexed { index, page ->
-                    if (cancelFlag) return@forEachIndexed
-                    try {
-                        val fileResult = withContext(Dispatchers.IO) {
-                            when (mode) {
-                                SaveMode.VIDEO -> downloader.downloadVideo(
-                                    api, video, page.cid, chosenQuality?.quality ?: quality, cookie,
-                                    onProgress = { done, total ->
-                                        val within = if (total > 0) done.toFloat() / total else 0f
-                                        progress = ((index + within) / pages.size * 100f).coerceIn(0f, 100f)
-                                    },
-                                    isCancelled = { cancelFlag }
-                                )
-                                SaveMode.COVER -> {
-                                    val ext = when {
-                                        video.coverUrl.contains(".gif", true) -> "gif"
-                                        video.coverUrl.contains(".webp", true) -> "webp"
-                                        video.coverUrl.contains(".png", true) -> "png"
-                                        else -> "jpg"
-                                    }
-                                    downloader.downloadBytes(video.coverUrl, "${video.bvid}_cover.$ext", cookie)
-                                }
-                                SaveMode.DANMAKU -> downloader.downloadBytes(
-                                    "https://comment.bilibili.com/${page.cid}.xml",
-                                    "${video.bvid}_P${page.page}_danmaku.xml", cookie
-                                )
-                                SaveMode.SUBTITLE -> {
-                                    val tracks = api.getSubtitleTracks(video, page.cid, cookie)
-                                    val track = tracks.firstOrNull() ?: error("该分P没有公开字幕")
-                                    val srt = api.downloadSubtitle(track, cookie)
-                                    downloader.saveText("${video.bvid}_P${page.page}.srt", srt)
-                                }
-                            }
-                        }
-                        successes += fileResult
-                    } catch (e: Exception) { failures += "P${page.page}: ${e.message}" }
-                }
-                progress = if (successes.isNotEmpty()) 100f else progress
-                status = when {
-                    cancelFlag -> "下载已取消。已完成文件：${successes.size}"
-                    failures.isNotEmpty() -> "完成 ${successes.size} 项，失败 ${failures.size} 项：${failures.joinToString("；").take(500)}"
-                    else -> "下载完成：${successes.size} 个文件已导出到 Download/bilibilidl。"
-                }
-                taskKey++
-            } finally { busy = false }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            DownloadWork.enqueue(context, video, pages, chosenQuality?.quality ?: quality, mode.name, selectedSubtitleLanguage)
+        }.onSuccess {
+            status = "下载任务已加入后台队列。离开页面后仍会继续，可在“已下载”查看任务。"
+            onOpenDownloads()
+        }.onFailure {
+            status = "创建后台下载任务失败：${it.message ?: "未知错误"}"
         }
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("bilibilidl", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("BILIBILI VIDEO TOOL / KOTLIN", style = MaterialTheme.typography.labelSmall)
+                Text("bilibilidl", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
+                Text("BILIBILI VIDEO DOWNLOADER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick = onOpenProfile) { Text("B站登录 ↗") }
         }
-        Card {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("把喜欢的视频，认真保存下来。", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FC)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("把喜欢的视频，认真保存下来。", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color(0xFF124B67))
                 Text("支持 BV、AV、完整视频链接和 b23.tv 短链")
                 OutlinedTextField(value = input, onValueChange = onInput, modifier = Modifier.fillMaxWidth(),
                     label = { Text("视频链接 / BV号 / AV号") }, singleLine = true)
-                Button(onClick = { parseVideo() }, enabled = !busy && input.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "处理中…" else "解析视频")
+                Button(
+                    onClick = { parseVideo() },
+                    enabled = !busy && input.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(if (busy) "正在解析…" else "解析视频", style = MaterialTheme.typography.titleMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = autoPlay, onCheckedChange = { autoPlay = it })
@@ -365,8 +403,31 @@ private fun HomePage(
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("下载设置", fontWeight = FontWeight.Bold)
                     Box {
-                        OutlinedButton(onClick = { qualityMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("画质：${chosenQuality?.description ?: "接口暂未返回画质列表（尝试 1080P）"}")
+                        OutlinedButton(onClick = {
+                            qualityMenu = true
+                            val targetVideo = info
+                            val targetPage = currentPage
+                            if (qualities.isEmpty() && !qualityLoading && targetVideo != null && targetPage != null) {
+                                qualityLoading = true
+                                scope.launch {
+                                    try {
+                                        val streams = withContext(Dispatchers.IO) {
+                                            api.getPlayStreams(targetVideo, targetPage.cid, 80, cookie)
+                                        }
+                                        qualities = streams.acceptedQualities
+                                        if (qualities.none { it.quality == quality }) {
+                                            quality = qualities.firstOrNull()?.quality ?: 80
+                                        }
+                                        if (qualities.isEmpty()) status = "B站没有返回可选画质；仍可尝试默认画质下载。"
+                                    } catch (e: Exception) {
+                                        status = "读取画质失败：${e.message ?: "接口暂不可用"}；仍可尝试默认画质下载。"
+                                    } finally {
+                                        qualityLoading = false
+                                    }
+                                }
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (qualityLoading) "正在读取画质…" else "画质：${chosenQuality?.description ?: "默认 1080P（点击加载选项）"}")
                         }
                         DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
                             qualities.forEach { q ->
@@ -378,8 +439,22 @@ private fun HomePage(
                     Box {
                         OutlinedButton(onClick = { modeMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("保存内容：${mode.label}") }
                         DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                            SaveMode.entries.forEach { m -> DropdownMenuItem(text = { Text(m.label) }, onClick = { mode = m; modeMenu = false }) }
+                            SaveMode.entries.forEach { m -> DropdownMenuItem(text = { Text(m.label) }, onClick = { mode = m; modeMenu = false; if (m == SaveMode.SUBTITLE) loadSubtitleTracks() }) }
                         }
+                    }
+                    if (mode == SaveMode.SUBTITLE) {
+                        Box {
+                            OutlinedButton(onClick = { if (subtitleTracks.isEmpty()) loadSubtitleTracks() else subtitleMenu = true }, modifier = Modifier.fillMaxWidth(), enabled = !subtitleLoading) {
+                                Text(if (subtitleLoading) "正在读取字幕…" else "字幕语言：${selectedSubtitleLanguage.ifBlank { "未选择" }}")
+                            }
+                            DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }) {
+                                subtitleTracks.distinctBy { it.language }.forEach { track ->
+                                    DropdownMenuItem(text = { Text(track.language.ifBlank { "未标注语言" }) }, onClick = { selectedSubtitleLanguage = track.language; subtitleMenu = false })
+                                }
+                                if (subtitleTracks.isEmpty()) DropdownMenuItem(text = { Text("当前分P无可用字幕") }, onClick = { subtitleMenu = false })
+                            }
+                        }
+                        Text("多分P下载时会优先匹配所选语言；若某一分P没有该语言，则回退到该分P的第一条可用字幕。", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -458,45 +533,165 @@ private fun VideoActions(api: BiliApi, video: VideoInfo, cookie: String, onMessa
     }
 }
 
+private fun formatRate(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0))
+    bytesPerSecond >= 1024L -> String.format(Locale.US, "%.0f KB/s", bytesPerSecond / 1024.0)
+    else -> "$bytesPerSecond B/s"
+}
+
 @Composable
 private fun DownloadsPage(downloader: StreamDownloader) {
     var files by remember { mutableStateOf(downloader.localFiles()) }
+    var pendingDelete by remember { mutableStateOf<File?>(null) }
+    var message by remember { mutableStateOf("") }
     val context = LocalContext.current
+    fun mimeType(file: File): String = when (file.extension.lowercase()) {
+        "mp4" -> "video/mp4"; "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"
+        "gif" -> "image/gif"; "webp" -> "image/webp"; "xml" -> "application/xml"; "srt" -> "text/plain"; else -> "*/*"
+    }
+    fun contentUri(file: File) = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("已下载", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-            TextButton(onClick = { files = downloader.localFiles() }) { Text("刷新") }
+            Column(Modifier.weight(1f)) {
+                Text("下载中心", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("管理任务、查看历史与本地文件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = { files = downloader.localFiles(); message = "" }) { Text("刷新") }
         }
-        if (files.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这里还空空的。解析并下载后，文件会显示在这里。") }
+        Text("共 ${files.size} 个文件 · ${formatBytes(files.sumOf { it.length() })}", style = MaterialTheme.typography.bodySmall)
+        var workInfos by remember { mutableStateOf(emptyList<WorkInfo>()) }
+        var taskQuery by remember { mutableStateOf("") }
+        var selectedTaskIds by remember { mutableStateOf(setOf<String>()) }
+        var history by remember { mutableStateOf(emptyList<DownloadHistoryEntry>()) }
+        LaunchedEffect(Unit) {
+            val manager = WorkManager.getInstance(context)
+            manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { updated ->
+                workInfos = updated
+                history = withContext(Dispatchers.IO) { DownloadHistoryStore(context).list() }
+            }
+        }
+        val visibleTasks = workInfos.sortedByDescending { work -> DownloadWork.inputFor(context, work.tags).getLong(DownloadWork.KEY_CREATED_AT, 0L) }
+            .filter { work -> (work.progress.getString(DownloadWork.KEY_TITLE) ?: DownloadWork.inputFor(context, work.tags).getString(DownloadWork.KEY_TITLE) ?: "").contains(taskQuery, true) }
+            .take(50)
+        if (workInfos.isNotEmpty()) Card {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("后台下载任务", fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = taskQuery, onValueChange = { taskQuery = it }, label = { Text("搜索任务") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { selectedTaskIds = visibleTasks.map { it.id.toString() }.toSet() }) { Text("全选当前列表") }
+                    TextButton(onClick = {
+                        visibleTasks.filter { it.id.toString() in selectedTaskIds }.forEach { work ->
+                            if (work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) DownloadWork.pause(context, work.id)
+                        }
+                        selectedTaskIds = emptySet()
+                    }) { Text("批量暂停") }
+                    TextButton(onClick = {
+                        visibleTasks.filter { it.id.toString() in selectedTaskIds && (it.state == WorkInfo.State.CANCELLED || it.state == WorkInfo.State.FAILED) }
+                            .forEach { DownloadWork.resume(context, DownloadWork.inputFor(context, it.tags)) }
+                        selectedTaskIds = emptySet()
+                    }) { Text("批量继续") }
+                }
+                visibleTasks.forEach { work ->
+                    val taskInput = DownloadWork.inputFor(context, work.tags)
+                    val title = work.progress.getString(DownloadWork.KEY_TITLE)
+                        ?: taskInput.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
+                    val percent = if (work.state == WorkInfo.State.SUCCEEDED) 100 else work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
+                    val message = when (work.state) {
+                        WorkInfo.State.SUCCEEDED -> "已完成"
+                        WorkInfo.State.FAILED -> work.outputData.getString(DownloadWork.KEY_ERROR) ?: "下载失败"
+                        WorkInfo.State.CANCELLED -> "已暂停 / 已取消（可继续）"
+                        WorkInfo.State.ENQUEUED -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "排队中 / 等待网络"
+                        else -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "正在处理"
+                    }
+                    val speed = work.progress.getLong(DownloadWork.KEY_SPEED, 0L)
+                    val eta = work.progress.getLong(DownloadWork.KEY_ETA, -1L)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = work.id.toString() in selectedTaskIds, onCheckedChange = { checked ->
+                            selectedTaskIds = if (checked) selectedTaskIds + work.id.toString() else selectedTaskIds - work.id.toString()
+                        })
+                        Column(Modifier.weight(1f)) {
+                            Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxWidth())
+                            val detail = if (work.state == WorkInfo.State.RUNNING && speed > 0L)
+                                "$message · $percent% · ${formatRate(speed)}" + if (eta >= 0L) " · 剩余约 ${eta}秒" else ""
+                            else "$message · $percent%"
+                            Text(detail, style = MaterialTheme.typography.bodySmall)
+                        }
+                        when (work.state) {
+                            WorkInfo.State.RUNNING -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("暂停") }
+                            WorkInfo.State.ENQUEUED -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("移除") }
+                            WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, taskInput) }) { Text("继续") }
+                            WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, taskInput) }) { Text("重试") }
+                            else -> Unit
+                        }
+                    }
+                }
+            }
+        }
+        if (history.isNotEmpty()) Card {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("下载历史（本机保存）", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { DownloadHistoryStore(context).clear(); history = emptyList() }) { Text("清空") }
+                }
+                history.filter { it.title.contains(taskQuery, true) }.take(50).forEach { item ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text("${item.mode} · ${item.files.size} 个文件 · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(item.createdAt))}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = { DownloadHistoryStore(context).delete(item.taskId); history = DownloadHistoryStore(context).list() }) { Text("删除记录") }
+                    }
+                    item.files.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall, maxLines = 1) }
+                    Divider()
+                }
+            }
+        }
+        if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        val visibleFiles = files.filter { it.name.contains(taskQuery, true) }
+        if (visibleFiles.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (taskQuery.isBlank()) "这里还空空的。解析并下载后，文件会显示在这里。" else "没有匹配的本地文件。") }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                items(files, key = { it.absolutePath }) { file ->
+                items(visibleFiles, key = { it.absolutePath }) { file ->
                     Card {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                Text("${formatBytes(file.length())} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                            Text("${formatBytes(file.length())} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(contentUri(file), mimeType(file)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                                        .onFailure { message = it.message ?: "无法打开文件" }
+                                }) { Text("打开") }
+                                TextButton(onClick = {
+                                    runCatching {
+                                        val send = Intent(Intent.ACTION_SEND).apply { type = mimeType(file); putExtra(Intent.EXTRA_STREAM, contentUri(file)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                                        context.startActivity(Intent.createChooser(send, "分享下载文件"))
+                                    }.onFailure { message = it.message ?: "无法分享文件" }
+                                }) { Text("分享") }
+                                TextButton(onClick = { pendingDelete = file }) { Text("删除", color = MaterialTheme.colorScheme.error) }
                             }
-                            TextButton(onClick = {
-                                runCatching {
-                                    val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
-                                    val mime = when (file.extension.lowercase()) {
-                                        "mp4" -> "video/mp4"; "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"
-                                        "gif" -> "image/gif"; "webp" -> "image/webp"; "xml" -> "application/xml"
-                                        "srt" -> "text/plain"; else -> "*/*"
-                                    }
-                                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                                }.onFailure { }
-                            }) { Text("打开") }
                         }
                     }
                 }
             }
         }
     }
+    pendingDelete?.let { file ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除本地文件？") },
+            text = { Text("将从应用本地下载列表中删除“${file.name}”。已导出到系统 Download 文件夹的副本不会自动删除。") },
+            confirmButton = { TextButton(onClick = {
+                val deleted = runCatching { downloader.deleteLocalFile(file) }.getOrDefault(false)
+                message = if (deleted) "已删除本地副本。" else "删除失败，文件可能已不存在。"
+                files = downloader.localFiles(); pendingDelete = null
+            }) { Text("删除", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+        )
+    }
 }
-
 @Composable
 private fun SyncPage(api: BiliApi, cookie: String, onOpen: (VideoInfo) -> Unit) {
     val scope = rememberCoroutineScope()
@@ -547,8 +742,8 @@ private fun SyncPage(api: BiliApi, cookie: String, onOpen: (VideoInfo) -> Unit) 
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("B站同步", style = MaterialTheme.typography.headlineMedium)
-        Text("观看历史 · 收藏夹 · 全站搜索", style = MaterialTheme.typography.bodySmall)
+        Text("内容同步", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("观看历史 · 收藏夹 · 全站搜索", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(value = keyword, onValueChange = { keyword = it }, modifier = Modifier.fillMaxWidth(), label = { Text("搜索视频标题或 UP 主") }, singleLine = true)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("history" to "历史记录", "favorites" to "收藏夹", "online" to "B站搜索").forEach { (key, label) ->
@@ -588,7 +783,7 @@ private fun ProfilePage(
     val files = remember { File(context.filesDir, "downloads").listFiles()?.filter { it.isFile && it.length() > 0 }.orEmpty() }
     val total = files.sumOf { it.length() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("我的", style = MaterialTheme.typography.headlineMedium)
+        Text("个人中心", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Card {
             Column(Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (profile?.avatar?.isNotBlank() == true) AsyncImage(model = profile.avatar, contentDescription = "头像", modifier = Modifier.size(72.dp))

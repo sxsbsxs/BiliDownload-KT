@@ -212,6 +212,7 @@ class StreamDownloader(private val context: Context) {
         cid: Long,
         quality: Int,
         cookie: String,
+        taskId: String = "",
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         isCancelled: () -> Boolean = { false }
     ): String {
@@ -219,31 +220,59 @@ class StreamDownloader(private val context: Context) {
         val folder = File(context.filesDir, "downloads").apply { if (!exists()) mkdirs() }
         val title = info.title.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]+"), "_")
             .trim().take(100).ifBlank { "bilibili_video" }
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val output = File(folder, "${title}_${stamp}.mp4")
+        val stamp = if (taskId.isNotBlank()) "${taskId.take(8)}_${cid}" else SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val output = if (taskId.isNotBlank()) File(folder, "${title}_${stamp}.mp4") else uniqueFile(folder, "${title}_${stamp}.mp4")
         val http = OkHttpClient.Builder().connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).followRedirects(true).build()
         fun download(urls: List<String>, target: File) {
+            if (target.isFile && target.length() > 0L) return
             val failures = mutableListOf<String>()
             for (url in urls.filter { it.startsWith("https://") || it.startsWith("http://") }.distinct()) {
                 if (isCancelled()) error("下载已取消")
                 try {
                     val part = File(target.parentFile, target.name + ".part")
+                    val meta = File(part.parentFile, part.name + ".meta")
                     var offset = if (part.exists()) part.length() else 0L
+                    val savedMeta = runCatching { org.json.JSONObject(meta.readText()) }.getOrNull()
+                    val savedValidator = savedMeta?.optString("etag").orEmpty()
+                        .ifBlank { savedMeta?.optString("last_modified").orEmpty() }
+                    if (offset > 0L && (savedMeta == null ||
+                            (savedMeta.optString("url") != url && savedValidator.isBlank()))) {
+                        part.delete(); meta.delete(); offset = 0L
+                    }
                     val builder = Request.Builder().url(url)
                         .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36")
                         .header("Referer", "https://www.bilibili.com/")
                         .header("Accept", "*/*")
                     val normalized = api.normalizeCookie(cookie)
                     if (normalized.isNotBlank()) builder.header("Cookie", normalized)
-                    if (offset > 0) builder.header("Range", "bytes=$offset-")
+                    if (offset > 0) {
+                        builder.header("Range", "bytes=$offset-")
+                        if (savedValidator.isNotBlank()) builder.header("If-Range", savedValidator)
+                    }
                     http.newCall(builder.get().build()).execute().use { response ->
                         if (offset > 0 && response.code != 206) {
-                            part.delete()
-                            offset = 0
+                            part.delete(); meta.delete(); offset = 0
                         }
+                        val responseValidator = response.header("ETag").orEmpty()
+                            .ifBlank { response.header("Last-Modified").orEmpty() }
+                        if (offset > 0 && response.code == 206 && savedValidator.isNotBlank() &&
+                            responseValidator.isNotBlank() && responseValidator != savedValidator) {
+                            part.delete(); meta.delete()
+                            error("远端文件已变化，已清除旧断点，请重试")
+                        }
+                        if (offset > 0 && response.code == 206 &&
+                            !response.header("Content-Range").orEmpty().startsWith("bytes $offset-")) {
+                            part.delete(); meta.delete()
+                            error("服务器返回的断点续传范围不匹配，请重试")
+                        }
+                        if (response.code == 206 && offset == 0L) error("服务器意外返回分段响应")
                         if (!response.isSuccessful) error("HTTP ${response.code}")
                         val body = response.body ?: error("空响应")
+                        org.json.JSONObject().put("url", url)
+                            .put("etag", response.header("ETag").orEmpty())
+                            .put("last_modified", response.header("Last-Modified").orEmpty())
+                            .also { meta.writeText(it.toString()) }
                         val total = body.contentLength().coerceAtLeast(0) + offset
                         var done = offset
                         FileOutputStream(part, offset > 0).use { out ->
@@ -263,6 +292,7 @@ class StreamDownloader(private val context: Context) {
                         if (part.length() <= 0) error("下载文件为空")
                         if (target.exists()) target.delete()
                         if (!part.renameTo(target)) error("无法完成临时文件重命名")
+                        meta.delete()
                         return
                     }
                 } catch (e: Exception) {
@@ -273,7 +303,7 @@ class StreamDownloader(private val context: Context) {
             error("所有下载地址均失败：${failures.joinToString("；")}")
         }
         if (!streams.progressiveUrl.isNullOrBlank()) {
-            download(listOf(streams.progressiveUrl), output)
+            download(listOf(streams.progressiveUrl) + streams.progressiveBackups, output)
         } else {
             val videoUrl = streams.videoUrl ?: error("B站未返回视频轨道")
             val audioUrl = streams.audioUrl ?: error("B站未返回音频轨道")
@@ -302,7 +332,9 @@ class StreamDownloader(private val context: Context) {
         url: String,
         displayName: String,
         cookie: String = "",
-        maxBytes: Long = 50L * 1024L * 1024L
+        maxBytes: Long = 50L * 1024L * 1024L,
+        taskId: String = "",
+        isCancelled: () -> Boolean = { false }
     ): String {
         val request = Request.Builder().url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36")
@@ -310,24 +342,78 @@ class StreamDownloader(private val context: Context) {
             .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
             .get().build()
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
-        val target = File(folder, displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        val safeName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val target = if (taskId.isBlank()) uniqueFile(folder, safeName) else File(folder, safeName)
+        val part = File(folder, target.name + ".part")
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("资源下载失败 HTTP ${response.code}")
-            val bytes = response.body?.bytes() ?: error("资源内容为空")
-            if (bytes.isEmpty() || bytes.size.toLong() > maxBytes) error("资源为空或超过大小限制")
-            target.writeBytes(bytes)
+            val body = response.body ?: error("资源内容为空")
+            if (body.contentLength() > maxBytes) error("资源超过大小限制")
+            var total = 0L
+            FileOutputStream(part, false).use { out ->
+                val input = body.byteStream()
+                val buffer = ByteArray(32 * 1024)
+                while (true) {
+                    if (isCancelled()) error("下载已取消")
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    total += count
+                    if (total > maxBytes) error("资源超过大小限制")
+                    out.write(buffer, 0, count)
+                }
+                out.fd.sync()
+            }
+            if (total <= 0L) error("资源内容为空")
         }
+        if (target.exists()) target.delete()
+        if (!part.renameTo(target)) error("无法保存资源文件")
         return exportToPublicDownloads(target)
     }
 
-    fun saveText(displayName: String, text: String): String {
+    fun saveText(displayName: String, text: String, taskId: String = ""): String {
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
         val safe = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val file = File(folder, safe)
+        val file = if (taskId.isBlank()) uniqueFile(folder, safe) else File(folder, safe)
         file.writeText(text, Charsets.UTF_8)
         if (!file.isFile || file.length() <= 0) error("保存文本文件失败")
         return exportToPublicDownloads(file)
     }
+
+    private fun uniqueFile(folder: File, requestedName: String): File {
+        val requested = File(folder, requestedName)
+        if (!requested.exists()) return requested
+        val base = requested.nameWithoutExtension
+        val ext = requested.extension
+        var index = 2
+        while (true) {
+            val candidate = File(folder, if (ext.isBlank()) "$base ($index)" else "$base ($index).$ext")
+            if (!candidate.exists()) return candidate
+            index++
+        }
+    }
+
+    /** Delete only files owned by this app private downloads directory. */
+    fun deleteLocalFile(file: File): Boolean {
+        val root = File(context.filesDir, "downloads").canonicalFile
+        val target = file.canonicalFile
+        require(target.parentFile == root) { "只能删除应用下载目录中的文件" }
+        require(target.isFile) { "文件不存在或不是普通文件" }
+        return target.delete()
+    }
+
+    fun cleanupTaskArtifacts(taskId: String) {
+        if (taskId.isBlank()) return
+        val prefix = taskId.take(8) + "_"
+        val folder = File(context.filesDir, "downloads")
+        folder.listFiles()?.filter { file ->
+            file.name.contains(prefix) && (file.name.endsWith(".part") ||
+                file.name.endsWith(".meta") || file.name.endsWith(".video.m4s") ||
+                file.name.endsWith(".audio.m4s"))
+        }?.forEach { it.delete() }
+    }
+
+    fun availableSpaceBytes(): Long = android.os.StatFs(context.filesDir.absolutePath).availableBytes
 
     fun localFiles(): List<File> {
         val folder = File(context.filesDir, "downloads")

@@ -77,28 +77,45 @@ class BiliApi {
 
     fun extractVideoInput(input: String): Pair<String, String> {
         val value = input.trim()
-        Regex("(?i)BV[0-9A-Za-z]{10}").find(value)?.value?.let { return "bvid" to it }
-        Regex("(?i)(?:^|[/?:=&])av\\s*(\\d+)").find(value)?.groupValues?.get(1)?.let { return "aid" to it }
-        Regex("^\\s*(\\d+)\\s*$").matchEntire(value)?.groupValues?.get(1)?.let { return "aid" to it }
-        if (value.contains("b23.tv") || value.contains("bili2233.cn")) {
-            val short = if (value.startsWith("http")) value else "https://$value"
-            val req = Request.Builder().url(short).header("User-Agent", USER_AGENT).get().build()
+        if (value.isBlank()) error("请输入 BV、AV 或 B站视频链接")
+        Regex("(?i)^BV[0-9A-Za-z]{10}$").matchEntire(value)?.value?.let { return "bvid" to it }
+        Regex("(?i)^av\\s*(\\d+)$").matchEntire(value)?.groupValues?.get(1)?.let { return "aid" to it }
+        Regex("^\\d+$").matchEntire(value)?.value?.let { return "aid" to it }
+
+        val candidate = if (value.startsWith("http://", true) || value.startsWith("https://", true)) value else "https://$value"
+        val parsed = runCatching { candidate.toHttpUrl() }.getOrElse {
+            error("视频链接格式无效")
+        }
+        fun isAllowedBiliHost(host: String): Boolean =
+            host == "bilibili.com" || host.endsWith(".bilibili.com") ||
+                host == "b23.tv" || host == "www.b23.tv" ||
+                host == "bili2233.cn" || host == "www.bili2233.cn"
+
+        if (!isAllowedBiliHost(parsed.host)) {
+            error("仅支持 Bilibili 官方域名及 b23.tv 短链")
+        }
+
+        var resolvedPath = parsed.encodedPath
+        if (parsed.host == "b23.tv" || parsed.host == "www.b23.tv" ||
+            parsed.host == "bili2233.cn" || parsed.host == "www.bili2233.cn") {
+            val req = Request.Builder().url(parsed).header("User-Agent", USER_AGENT).get().build()
             client.newCall(req).execute().use { response ->
-                val target = response.request.url.toString()
-                Regex("(?i)BV[0-9A-Za-z]{10}").find(target)?.value?.let { return "bvid" to it }
-                Regex("(?i)/video/av(\\d+)").find(target)?.groupValues?.get(1)?.let { return "aid" to it }
-                val html = response.body?.string().orEmpty()
-                Regex("(?i)BV[0-9A-Za-z]{10}").find(html)?.value?.let { return "bvid" to it }
+                val finalUrl = response.request.url
+                if (!isAllowedBiliHost(finalUrl.host)) {
+                    error("短链跳转到了非 B站官方域名，已阻止解析")
+                }
+                resolvedPath = finalUrl.encodedPath
+                val body = response.body?.string().orEmpty()
+                Regex("(?i)BV[0-9A-Za-z]{10}").find(resolvedPath)?.value?.let { return "bvid" to it }
+                Regex("(?i)/video/av(\\d+)").find(resolvedPath)?.groupValues?.get(1)?.let { return "aid" to it }
+                Regex("(?i)BV[0-9A-Za-z]{10}").find(body)?.value?.let { return "bvid" to it }
             }
         }
-        val parsed = runCatching { (if (value.startsWith("http")) value else "https://$value").toHttpUrl() }.getOrNull()
-        if (parsed != null && parsed.host.endsWith("bilibili.com")) {
-            Regex("(?i)BV[0-9A-Za-z]{10}").find(parsed.encodedPath)?.value?.let { return "bvid" to it }
-            Regex("(?i)av(\\d+)").find(parsed.encodedPath)?.groupValues?.get(1)?.let { return "aid" to it }
-        }
-        error("无法识别视频地址，请输入 BV、AV、B站视频链接或 b23.tv 短链")
-    }
 
+        Regex("(?i)BV[0-9A-Za-z]{10}").find(resolvedPath)?.value?.let { return "bvid" to it }
+        Regex("(?i)/video/av(\\d+)").find(resolvedPath)?.groupValues?.get(1)?.let { return "aid" to it }
+        error("无法从链接中识别视频 ID，请检查是否为有效的 B站视频链接")
+    }
     fun getVideoInfo(input: String, cookie: String = ""): VideoInfo {
         val (kind, id) = extractVideoInput(input)
         val query = if (kind == "bvid") "bvid=${encode(id)}" else "aid=${encode(id)}"
@@ -136,15 +153,24 @@ class BiliApi {
     }
 
     private fun mixinKey(cookie: String): String {
-        val d = getData("$API/x/web-interface/nav", cookie)
-        val wbi = d.optJSONObject("wbi_img") ?: error("B站 WBI 签名密钥不可用")
-        val source = wbi.optString("img_url").substringAfterLast('/').substringBefore('.') +
-            wbi.optString("sub_url").substringAfterLast('/').substringBefore('.')
-        if (source.length < 64) error("B站 WBI 签名密钥长度异常")
-        return WBI_ORDER.joinToString("") { source[it].toString() }.take(32)
+        val now = System.currentTimeMillis()
+        cachedWbiKey?.takeIf { now - cachedWbiAt < WBI_CACHE_MILLIS }?.let { return it }
+        synchronized(BiliApi::class.java) {
+            val checkedAt = System.currentTimeMillis()
+            cachedWbiKey?.takeIf { checkedAt - cachedWbiAt < WBI_CACHE_MILLIS }?.let { return it }
+            val d = getData("$API/x/web-interface/nav", cookie)
+            val wbi = d.optJSONObject("wbi_img") ?: error("B站 WBI 签名密钥不可用")
+            val source = wbi.optString("img_url").substringAfterLast('/').substringBefore('.') +
+                wbi.optString("sub_url").substringAfterLast('/').substringBefore('.')
+            if (source.length < 64) error("B站 WBI 签名密钥长度异常")
+            val key = WBI_ORDER.joinToString("") { source[it].toString() }.take(32)
+            cachedWbiKey = key
+            cachedWbiAt = checkedAt
+            return key
+        }
     }
 
-    private fun signedPlayUrl(info: VideoInfo, qn: Int, cookie: String): JSONObject {
+    private fun signedPlayUrl(info: VideoInfo, qn: Int, cookie: String, mixin: String): JSONObject {
         val params = sortedMapOf(
             "cid" to info.cid.toString(), "qn" to qn.toString(),
             "fnval" to "4048", "fnver" to "0", "fourk" to "1",
@@ -154,15 +180,18 @@ class BiliApi {
         val query = params.entries.joinToString("&") { (k, v) ->
             "${encode(k)}=${encode(v.filterNot { it in "!'()*" })}"
         }
-        val rid = md5(query + mixinKey(cookie))
+        val rid = md5(query + mixin)
         return getData("$API/x/player/wbi/playurl?$query&w_rid=$rid", cookie)
     }
 
     fun getPlayStreams(info: VideoInfo, cid: Long, qn: Int, cookie: String = ""): PlayStreams {
         val target = info.copy(cid = cid)
-        val data = try {
-            signedPlayUrl(target, qn, cookie)
-        } catch (wbiError: Exception) {
+        // Fall back only when the WBI key itself cannot be obtained. Do not repeat
+        // a rejected/failed playurl request against the legacy endpoint.
+        val key = runCatching { mixinKey(cookie) }.getOrNull()
+        val data = if (key != null) {
+            signedPlayUrl(target, qn, cookie, key)
+        } else {
             val params = "cid=$cid&qn=$qn&fnval=4048&fnver=0&fourk=1&" +
                 if (target.bvid.isNotBlank()) "bvid=${encode(target.bvid)}" else "avid=${target.aid}"
             getData("$API/x/player/playurl?$params", cookie)
@@ -198,7 +227,9 @@ class BiliApi {
         val chosen = videoCandidates.filter { it.optInt("id") <= qn }.maxByOrNull { it.optInt("id") }
             ?: videoCandidates.minByOrNull { kotlin.math.abs(it.optInt("id") - qn) }
         val audio = audioCandidates.maxByOrNull { it.optLong("bandwidth") }
-        val progressive = durl?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+        val progressiveObject = durl?.optJSONObject(0)
+        val progressive = progressiveObject?.optString("url")?.takeIf { it.isNotBlank() }
+        val progressiveBackups = progressiveObject?.optJSONArray("backup_url").toStringList()
         return PlayStreams(
             videoUrl = chosen?.optString("baseUrl")?.takeIf { it.isNotBlank() }
                 ?: chosen?.optString("base_url")?.takeIf { it.isNotBlank() }
@@ -210,6 +241,7 @@ class BiliApi {
             acceptedQualities = accepted.entries.sortedByDescending { it.key }.map { StreamChoice(it.key, it.value) },
             videoBackups = chosen?.optJSONArray("backupUrl").toStringList(),
             audioBackups = audio?.optJSONArray("backupUrl").toStringList(),
+            progressiveBackups = progressiveBackups,
             format = if (progressive != null) "durl" else "dash"
         )
     }
@@ -409,6 +441,9 @@ class BiliApi {
 
     companion object {
         private const val API = "https://api.bilibili.com"
+        private const val WBI_CACHE_MILLIS = 10L * 60L * 1000L
+        @Volatile private var cachedWbiKey: String? = null
+        @Volatile private var cachedWbiAt: Long = 0L
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
         private val WBI_ORDER = intArrayOf(46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,52,44,34)
     }

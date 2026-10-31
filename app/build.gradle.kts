@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.chaquo.python")
 }
 
 android {
@@ -10,22 +11,19 @@ android {
 
     defaultConfig {
         applicationId = "com.example.bilidownload"
-        // Android 6.0 (API 23) and newer. Activity 1.10.x requires API 23+.
-        minSdk = 23
+        minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
-    }
+        versionCode = 3
+        versionName = "2.0.0"
 
-    // No ABI filters/splits: each APK includes all native ABIs supplied by dependencies,
-    // so one APK can be installed on supported 32-bit and 64-bit ARM devices.
-    // (The current dependency set is expected to be ABI-neutral.)
+        // Chaquopy supplies native Python runtimes for these Android ABIs.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
 
     buildTypes {
         release {
-            // CI-distributed APKs must be signed to install. This uses the standard
-            // debug key for test distribution; replace with a private release key
-            // before publishing to an app store.
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
@@ -43,6 +41,12 @@ android {
     buildFeatures { compose = true }
 }
 
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+    }
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
@@ -53,11 +57,13 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.okhttp)
     implementation("com.google.zxing:core:3.5.3")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-gif:2.7.0")
     implementation(libs.coroutines.android)
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
