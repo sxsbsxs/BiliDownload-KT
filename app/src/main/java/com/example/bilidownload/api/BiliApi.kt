@@ -5,6 +5,8 @@ import com.example.bilidownload.model.StreamChoice
 import com.example.bilidownload.model.VideoInfo
 import com.example.bilidownload.model.VideoPage
 import okhttp3.OkHttpClient
+import okhttp3.Cookie
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -109,6 +111,43 @@ class BiliApi {
             progressiveUrl = durl?.optString("url")?.takeIf { it.isNotBlank() },
             acceptedQualities = accepted
         )
+    }
+
+
+    data class QrLoginTicket(val url: String, val key: String)
+    data class QrLoginResult(val state: Int, val cookie: String = "", val message: String = "")
+
+    fun createQrLoginTicket(): QrLoginTicket {
+        val json = getJson("https://passport.bilibili.com/x/passport-login/web/qrcode/generate", "")
+        ensureSuccess(json)
+        val data = json.getJSONObject("data")
+        return QrLoginTicket(data.getString("url"), data.getString("qrcode_key"))
+    }
+
+    fun pollQrLogin(ticket: QrLoginTicket): QrLoginResult {
+        val url = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encode(ticket.key)}"
+        val request = Request.Builder().url(url).header("User-Agent", USER_AGENT)
+            .header("Referer", "https://www.bilibili.com/").get().build()
+        client.newCall(request).execute().use { response ->
+            val body = JSONObject(response.body?.string().orEmpty())
+            ensureSuccess(body)
+            val data = body.optJSONObject("data") ?: JSONObject()
+            val state = data.optInt("code", -1)
+            if (state == 0) {
+                val cookies = Cookie.parseAll("https://www.bilibili.com/".toHttpUrl(), response.headers)
+                    .filter { it.name in setOf("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid") }
+                    .joinToString("; ") { "${it.name}=${it.value}" }
+                if (!cookies.contains("SESSDATA=")) return QrLoginResult(-1, message = "扫码确认成功，但未获取到登录凭据，请重试")
+                return QrLoginResult(0, cookies, "登录成功")
+            }
+            val message = when (state) {
+                86101 -> "请使用 B站手机客户端扫码"
+                86090 -> "已扫码，请在手机 B站确认登录"
+                86038 -> "二维码已过期，请刷新"
+                else -> data.optString("message", "等待扫码")
+            }
+            return QrLoginResult(state, message = message)
+        }
     }
 
     private fun getJson(url: String, cookie: String): JSONObject {
