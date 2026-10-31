@@ -25,14 +25,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # 1. 获取仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || github.ref_name }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
-      # 2. 自动寻找 ZIP、识别项目根目录并解压
       - name: Extract ZIP files
         id: extract
         shell: bash
@@ -49,27 +49,14 @@ jobs:
           incoming = root / "incoming"
 
           archives = []
-
           if incoming.exists():
               archives.extend(incoming.glob("*.zip"))
-
           archives.extend(root.glob("*.zip"))
           archives = sorted(set(archives))
 
           if not archives:
               print("No ZIP files found.")
               raise SystemExit(0)
-
-          required = [
-              "settings.gradle",
-              "settings.gradle.kts",
-              "build.gradle",
-              "build.gradle.kts",
-              "gradle.properties",
-              "app/build.gradle",
-              "app/build.gradle.kts",
-              "app/src/main/AndroidManifest.xml"
-          ]
 
           total = 0
 
@@ -94,7 +81,6 @@ jobs:
                           continue
 
                       mode = item.external_attr >> 16
-
                       if stat.S_ISLNK(mode):
                           raise Exception("Symbolic link rejected: " + name)
 
@@ -106,7 +92,6 @@ jobs:
                       if not item.is_dir()
                   }
 
-                  # 查找真正的 Android 项目根目录
                   project_roots = set()
 
                   for item, path in entries:
@@ -118,59 +103,37 @@ jobs:
 
                       parent = path.parent
 
-                      checks = [
-                          (parent / "build.gradle").as_posix(),
-                          (parent / "build.gradle.kts").as_posix(),
-                          (parent / "gradle.properties").as_posix(),
-                          (parent / "app/build.gradle").as_posix(),
-                          (parent / "app/build.gradle.kts").as_posix(),
+                      root_build = (
+                          (parent / "build.gradle").as_posix() in available
+                          or (parent / "build.gradle.kts").as_posix() in available
+                      )
+
+                      app_build = (
+                          (parent / "app/build.gradle").as_posix() in available
+                          or (parent / "app/build.gradle.kts").as_posix() in available
+                      )
+
+                      has_properties = (
+                          (parent / "gradle.properties").as_posix() in available
+                      )
+
+                      has_manifest = (
                           (parent / "app/src/main/AndroidManifest.xml").as_posix()
-                      ]
-
-                      has_root_build = (
-                          checks[0] in available
-                          or checks[1] in available
+                          in available
                       )
 
-                      has_app_build = (
-                          checks[3] in available
-                          or checks[4] in available
-                      )
-
-                      if (
-                          has_root_build
-                          and checks[2] in available
-                          and has_app_build
-                          and checks[5] in available
-                      ):
+                      if root_build and app_build and has_properties and has_manifest:
                           project_roots.add(parent)
 
-                  if len(project_roots) == 0:
-                      print("Could not detect a complete Android project.")
-                      print("settings.gradle files found:")
-
-                      for item, path in entries:
-                          if path.name in (
-                              "settings.gradle",
-                              "settings.gradle.kts"
-                          ):
-                              print(" -", path)
-
+                  if len(project_roots) != 1:
                       raise Exception(
-                          "Android project root not found in ZIP."
-                      )
-
-                  if len(project_roots) > 1:
-                      raise Exception(
-                          "Multiple Android project roots found: "
+                          "Expected exactly one complete Android project root, found: "
                           + str(project_roots)
                       )
 
                   project_root = next(iter(project_roots))
-
                   print("Detected Android project root:", project_root)
 
-                  # 只解压项目根目录以内的文件
                   for item, path in entries:
                       if item.is_dir():
                           continue
@@ -179,13 +142,10 @@ jobs:
                           continue
 
                       parts = path.parts[len(project_root.parts):]
-
                       if not parts:
                           continue
 
                       target = root.joinpath(*parts)
-
-                      # 防止路径逃逸
                       resolved = target.resolve()
 
                       if resolved != root and root not in resolved.parents:
@@ -193,61 +153,43 @@ jobs:
 
                       target.parent.mkdir(parents=True, exist_ok=True)
 
-                      with z.open(item) as src:
-                          with open(target, "wb") as dst:
-                              shutil.copyfileobj(src, dst)
+                      with z.open(item) as src, open(target, "wb") as dst:
+                          shutil.copyfileobj(src, dst)
 
                       total += 1
-
                       if total > 20000:
                           raise Exception("Too many files in ZIP.")
 
-              # 解压成功后删除 ZIP
               archive.unlink()
               print("Deleted ZIP:", archive.name)
 
           print("Successfully extracted:", total, "files")
           PY
 
-      # 3. 检查 Android 项目文件
       - name: Check Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Project file list:"
-          find . -maxdepth 5 -type f \
-            ! -path "./.git/*" | sort
+          check_any() {
+            for file in "$@"; do
+              if [ -f "$file" ]; then
+                echo "FOUND: $file"
+                return 0
+              fi
+            done
+            echo "MISSING: one of: $*"
+            return 1
+          }
 
-          # 支持 Groovy 和 Kotlin DSL
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "MISSING: settings.gradle or settings.gradle.kts"
-            exit 1
-          fi
-
-          if [ ! -f "build.gradle" ] && [ ! -f "build.gradle.kts" ]; then
-            echo "MISSING: build.gradle or build.gradle.kts"
-            exit 1
-          fi
-
-          if [ ! -f "gradle.properties" ]; then
-            echo "MISSING: gradle.properties"
-            exit 1
-          fi
-
-          if [ ! -f "app/build.gradle" ] && [ ! -f "app/build.gradle.kts" ]; then
-            echo "MISSING: app/build.gradle or app/build.gradle.kts"
-            exit 1
-          fi
-
-          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            echo "MISSING: app/src/main/AndroidManifest.xml"
-            exit 1
-          fi
+          check_any settings.gradle settings.gradle.kts
+          check_any build.gradle build.gradle.kts
+          test -f gradle.properties
+          check_any app/build.gradle app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
 
           echo "All Android project files found."
 
-      # 4. 自动提交解压后的项目
       - name: Commit extracted files
         id: commit
         shell: bash
@@ -265,17 +207,13 @@ jobs:
           else
             git commit -m "Auto extract BiliDownload-KT project"
             git push origin "HEAD:${GITHUB_REF_NAME}"
-
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # 5. 自动触发 APK 构建
       - name: Trigger APK build
         if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-
-          gh workflow run build-helper.yml \
-            --ref "${GITHUB_REF_NAME}"
+          gh workflow run build-helper.yml --ref "${GITHUB_REF_NAME}"
