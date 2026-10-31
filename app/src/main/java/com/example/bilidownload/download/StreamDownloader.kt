@@ -320,6 +320,23 @@ class StreamDownloader(private val context: Context) {
         return exportToPublicDownloads(target)
     }
 
+    fun saveText(displayName: String, text: String): String {
+        val folder = File(context.filesDir, "downloads").apply { mkdirs() }
+        val safe = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val file = File(folder, safe)
+        file.writeText(text, Charsets.UTF_8)
+        if (!file.isFile || file.length() <= 0) error("保存文本文件失败")
+        return exportToPublicDownloads(file)
+    }
+
+    fun localFiles(): List<File> {
+        val folder = File(context.filesDir, "downloads")
+        if (!folder.exists()) return emptyList()
+        return folder.listFiles()?.filter { it.isFile && it.length() > 0 &&
+            !it.name.endsWith(".part") && !it.name.endsWith(".m4s") }
+            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+    }
+
     private val httpClient by lazy {
         OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS).followRedirects(true).build()
