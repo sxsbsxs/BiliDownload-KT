@@ -181,6 +181,10 @@ private fun HomePage(
     var mode by remember { mutableStateOf(SaveMode.VIDEO) }
     var modeMenu by remember { mutableStateOf(false) }
     var qualityMenu by remember { mutableStateOf(false) }
+    var subtitleTracks by remember { mutableStateOf(emptyList<SubtitleTrack>()) }
+    var selectedSubtitleLanguage by remember { mutableStateOf("") }
+    var subtitleMenu by remember { mutableStateOf(false) }
+    var subtitleLoading by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("粘贴 BV / AV / 视频链接或 b23.tv 短链开始解析。") }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -241,6 +245,25 @@ private fun HomePage(
         }
     }
 
+    fun loadSubtitleTracks() {
+        val video = info ?: return
+        val page = currentPage ?: return
+        subtitleLoading = true
+        scope.launch {
+            try {
+                val tracks = withContext(Dispatchers.IO) { api.getSubtitleTracks(video, page.cid, cookie) }
+                subtitleTracks = tracks
+                if (tracks.none { it.language == selectedSubtitleLanguage }) {
+                    selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
+                }
+                status = if (tracks.isEmpty()) "当前分P没有公开字幕" else "找到 ${tracks.size} 条字幕轨道"
+            } catch (e: Exception) {
+                subtitleTracks = emptyList()
+                status = "读取字幕列表失败：${e.message ?: "接口暂不可用"}"
+            } finally { subtitleLoading = false }
+        }
+    }
+
     fun startDownload() {
         val video = info ?: return
         if (busy) return
@@ -279,7 +302,8 @@ private fun HomePage(
                                 )
                                 SaveMode.SUBTITLE -> {
                                     val tracks = api.getSubtitleTracks(video, page.cid, cookie)
-                                    val track = tracks.firstOrNull() ?: error("该分P没有公开字幕")
+                                    val track = tracks.firstOrNull { it.language == selectedSubtitleLanguage }
+                                        ?: tracks.firstOrNull() ?: error("该分P没有公开字幕")
                                     val srt = api.downloadSubtitle(track, cookie)
                                     downloader.saveText("${video.bvid}_P${page.page}.srt", srt)
                                 }
@@ -379,8 +403,22 @@ private fun HomePage(
                     Box {
                         OutlinedButton(onClick = { modeMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("保存内容：${mode.label}") }
                         DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                            SaveMode.entries.forEach { m -> DropdownMenuItem(text = { Text(m.label) }, onClick = { mode = m; modeMenu = false }) }
+                            SaveMode.entries.forEach { m -> DropdownMenuItem(text = { Text(m.label) }, onClick = { mode = m; modeMenu = false; if (m == SaveMode.SUBTITLE) loadSubtitleTracks() }) }
                         }
+                    }
+                    if (mode == SaveMode.SUBTITLE) {
+                        Box {
+                            OutlinedButton(onClick = { if (subtitleTracks.isEmpty()) loadSubtitleTracks() else subtitleMenu = true }, modifier = Modifier.fillMaxWidth(), enabled = !subtitleLoading) {
+                                Text(if (subtitleLoading) "正在读取字幕…" else "字幕语言：${selectedSubtitleLanguage.ifBlank { "未选择" }}")
+                            }
+                            DropdownMenu(expanded = subtitleMenu, onDismissRequest = { subtitleMenu = false }) {
+                                subtitleTracks.distinctBy { it.language }.forEach { track ->
+                                    DropdownMenuItem(text = { Text(track.language.ifBlank { "未标注语言" }) }, onClick = { selectedSubtitleLanguage = track.language; subtitleMenu = false })
+                                }
+                                if (subtitleTracks.isEmpty()) DropdownMenuItem(text = { Text("当前分P无可用字幕") }, onClick = { subtitleMenu = false })
+                            }
+                        }
+                        Text("多分P下载时会优先匹配所选语言；若某一分P没有该语言，则回退到该分P的第一条可用字幕。", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
