@@ -30,6 +30,7 @@ object DownloadWork {
     const val KEY_SPEED = "speed"
     const val KEY_ETA = "eta"
     const val KEY_TASK_ID = "task_id"
+    const val KEY_CREATED_AT = "created_at"
 
     fun enqueue(context: Context, video: VideoInfo, pages: List<VideoPage>, quality: Int, mode: String, subtitleLanguage: String) {
         require(pages.isNotEmpty()) { "没有可下载的分P" }
@@ -41,7 +42,7 @@ object DownloadWork {
         val taskId = UUID.randomUUID().toString()
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
             .setInputData(workDataOf(KEY_TITLE to video.title, KEY_VIDEO to payload, KEY_MODE to mode,
-                KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId))
+                KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId, KEY_CREATED_AT to System.currentTimeMillis()))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()

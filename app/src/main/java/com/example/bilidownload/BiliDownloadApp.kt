@@ -509,7 +509,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                 manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { workInfos = it }
             }
         }
-        val visibleTasks = workInfos.take(20)
+        val visibleTasks = workInfos.sortedByDescending { it.inputData.getLong(DownloadWork.KEY_CREATED_AT, 0L) }.take(30)
         if (visibleTasks.isNotEmpty()) Card {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("后台下载任务", fontWeight = FontWeight.Bold)
