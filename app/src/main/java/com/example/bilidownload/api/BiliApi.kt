@@ -166,32 +166,33 @@ class BiliApi {
                 if (target.bvid.isNotBlank()) "bvid=${encode(target.bvid)}" else "avid=${target.aid}"
             getData("$API/x/player/playurl?$params", cookie)
         }
+        val dash = data.optJSONObject("dash") ?: JSONObject()
+        val regularVideo = dash.optJSONArray("video") ?: JSONArray()
+        val dolbyVideo = dash.optJSONObject("dolby")?.optJSONArray("video") ?: JSONArray()
+        val videoCandidates = buildList {
+            for (i in 0 until regularVideo.length()) regularVideo.optJSONObject(i)?.let(::add)
+            for (i in 0 until dolbyVideo.length()) dolbyVideo.optJSONObject(i)?.let(::add)
+        }.distinctBy { it.optInt("id") to it.optString("baseUrl", it.optString("base_url")) }
+        val audioArray = dash.optJSONArray("audio") ?: JSONArray()
+        val audioCandidates = (0 until audioArray.length()).mapNotNull { audioArray.optJSONObject(it) }
+        val actualIds = videoCandidates.map { it.optInt("id") }.filter { it > 0 }.toSet()
         val accepted = LinkedHashMap<Int, String>()
         val ids = data.optJSONArray("accept_quality") ?: JSONArray()
         val desc = data.optJSONArray("accept_description") ?: JSONArray()
         for (i in 0 until ids.length()) {
             val id = ids.optInt(i)
-            if (id > 0) accepted[id] = desc.optString(i).ifBlank { qualityLabel(id) }
+            if (id > 0 && (actualIds.isEmpty() || id in actualIds)) {
+                accepted[id] = desc.optString(i).ifBlank { qualityLabel(id) }
+            }
         }
-        val dash = data.optJSONObject("dash") ?: JSONObject()
-        val videos = dash.optJSONArray("video") ?: JSONArray()
-        val audios = dash.optJSONArray("audio") ?: JSONArray()
-        val videoCandidates = (0 until videos.length()).map { videos.getJSONObject(it) }
-        val audioCandidates = (0 until audios.length()).map { audios.getJSONObject(it) }
-        videoCandidates.forEach { v ->
-            val id = v.optInt("id")
-            if (id > 0) accepted.putIfAbsent(id, qualityLabel(id))
-        }
-        val dolbyVideo = dash.optJSONObject("dolby")?.optJSONArray("video") ?: JSONArray()
-        for (i in 0 until dolbyVideo.length()) {
-            val v = dolbyVideo.optJSONObject(i) ?: continue
-            val id = v.optInt("id")
+        videoCandidates.forEach { stream ->
+            val id = stream.optInt("id")
             if (id > 0) accepted.putIfAbsent(id, qualityLabel(id))
         }
         val durl = data.optJSONArray("durl")
-        val actualDurlQuality = data.optInt("quality")
-        if (durl != null && durl.length() > 0 && actualDurlQuality > 0) {
-            accepted.putIfAbsent(actualDurlQuality, qualityLabel(actualDurlQuality))
+        val durlQuality = data.optInt("quality")
+        if (videoCandidates.isEmpty() && durl != null && durl.length() > 0 && durlQuality > 0) {
+            accepted[durlQuality] = qualityLabel(durlQuality)
         }
         val chosen = videoCandidates.filter { it.optInt("id") <= qn }.maxByOrNull { it.optInt("id") }
             ?: videoCandidates.minByOrNull { kotlin.math.abs(it.optInt("id") - qn) }
