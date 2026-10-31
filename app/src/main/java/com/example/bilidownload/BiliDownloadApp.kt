@@ -45,7 +45,7 @@ import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -219,6 +219,7 @@ private fun HomePage(
     var selectedPage by remember { mutableIntStateOf(0) }
     var allPages by remember { mutableStateOf(false) }
     var qualities by remember { mutableStateOf(emptyList<StreamChoice>()) }
+    var qualityLoading by remember { mutableStateOf(false) }
     var quality by remember { mutableIntStateOf(80) }
     var mode by remember { mutableStateOf(SaveMode.VIDEO) }
     var modeMenu by remember { mutableStateOf(false) }
@@ -251,15 +252,9 @@ private fun HomePage(
                 allPages = false
                 subtitleTracks = emptyList()
                 selectedSubtitleLanguage = ""
-                try {
-                    val streams = withContext(Dispatchers.IO) { api.getPlayStreams(normalized, pages.first().cid, 127, cookie) }
-                    qualities = streams.acceptedQualities
-                    quality = qualities.firstOrNull()?.quality ?: 80
-                    status = "解析成功：${pages.size} 个分P，已读取接口实际返回的画质。"
-                } catch (q: Exception) {
-                    qualities = emptyList(); quality = 80
-                    status = "视频信息已解析；游客画质列表暂不可用（${q.message ?: "接口限制"}），仍可尝试下载。"
-                }
+                qualities = emptyList()
+                quality = 80
+                status = "解析成功：${pages.size} 个分P。画质列表将在你打开画质选项时再读取。"
                 if (autoPlay) showPlayer = true
             } catch (e: Exception) {
                 info = null; qualities = emptyList()
@@ -273,29 +268,10 @@ private fun HomePage(
         allPages = false
         val current = info ?: return
         val page = current.pages.getOrNull(index) ?: return
-        scope.launch {
-            try {
-                val streams = withContext(Dispatchers.IO) {
-                    api.getPlayStreams(current, page.cid, 127, cookie)
-                }
-                qualities = streams.acceptedQualities
-                quality = qualities.firstOrNull()?.quality ?: 80
-                if (mode == SaveMode.SUBTITLE) {
-                    runCatching { api.getSubtitleTracks(current, page.cid, cookie) }
-                        .onSuccess { tracks ->
-                            subtitleTracks = tracks
-                            if (tracks.none { it.language == selectedSubtitleLanguage }) {
-                                selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
-                            }
-                        }
-                }
-                status = "已切换到 P${page.page}，已更新该分P实际可用画质。"
-            } catch (e: Exception) {
-                qualities = emptyList()
-                quality = 80
-                status = "已切换到 P${page.page}，画质列表暂不可用；仍可尝试下载。"
-            }
-        }
+        qualities = emptyList()
+        quality = 80
+        if (mode == SaveMode.SUBTITLE) loadSubtitleTracks()
+        status = "已切换到 P${page.page}。需要选择画质时再读取该分P的画质列表。"
     }
 
     fun loadSubtitleTracks() {
@@ -410,8 +386,31 @@ private fun HomePage(
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("下载设置", fontWeight = FontWeight.Bold)
                     Box {
-                        OutlinedButton(onClick = { qualityMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("画质：${chosenQuality?.description ?: "接口暂未返回画质列表（尝试 1080P）"}")
+                        OutlinedButton(onClick = {
+                            qualityMenu = true
+                            val targetVideo = info
+                            val targetPage = currentPage
+                            if (qualities.isEmpty() && !qualityLoading && targetVideo != null && targetPage != null) {
+                                qualityLoading = true
+                                scope.launch {
+                                    try {
+                                        val streams = withContext(Dispatchers.IO) {
+                                            api.getPlayStreams(targetVideo, targetPage.cid, 80, cookie)
+                                        }
+                                        qualities = streams.acceptedQualities
+                                        if (qualities.none { it.quality == quality }) {
+                                            quality = qualities.firstOrNull()?.quality ?: 80
+                                        }
+                                        if (qualities.isEmpty()) status = "B站没有返回可选画质；仍可尝试默认画质下载。"
+                                    } catch (e: Exception) {
+                                        status = "读取画质失败：${e.message ?: "接口暂不可用"}；仍可尝试默认画质下载。"
+                                    } finally {
+                                        qualityLoading = false
+                                    }
+                                }
+                            }
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (qualityLoading) "正在读取画质…" else "画质：${chosenQuality?.description ?: "默认 1080P（点击加载选项）"}")
                         }
                         DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
                             qualities.forEach { q ->
@@ -546,13 +545,12 @@ private fun DownloadsPage(downloader: StreamDownloader) {
         var workInfos by remember { mutableStateOf(emptyList<WorkInfo>()) }
         var taskQuery by remember { mutableStateOf("") }
         var selectedTaskIds by remember { mutableStateOf(setOf<String>()) }
-        var history by remember { mutableStateOf(DownloadHistoryStore(context).list()) }
+        var history by remember { mutableStateOf(emptyList<DownloadHistoryStore.HistoryItem>()) }
         LaunchedEffect(Unit) {
             val manager = WorkManager.getInstance(context)
-            while (true) {
-                workInfos = withContext(Dispatchers.IO) { manager.getWorkInfosByTag(DownloadWork.TAG).get() }
+            manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { updated ->
+                workInfos = updated
                 history = withContext(Dispatchers.IO) { DownloadHistoryStore(context).list() }
-                delay(1500)
             }
         }
         val visibleTasks = workInfos.sortedByDescending { work -> DownloadWork.inputFor(context, work.tags).getLong(DownloadWork.KEY_CREATED_AT, 0L) }
