@@ -12,6 +12,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,21 +124,44 @@ fun BiliDownloadApp(api: BiliApi, downloader: StreamDownloader, vault: CookieVau
 
     MaterialTheme(
         colorScheme = lightColorScheme(
-            primary = androidx.compose.ui.graphics.Color(0xFFE83E70),
-            secondary = androidx.compose.ui.graphics.Color(0xFFF7DCE5),
-            background = androidx.compose.ui.graphics.Color(0xFFF7F5F7),
-            surface = androidx.compose.ui.graphics.Color.White
+            primary = Color(0xFF168FC2),
+            onPrimary = Color.White,
+            secondary = Color(0xFFE5F5FC),
+            onSecondary = Color(0xFF15536D),
+            background = Color(0xFFF4F7FA),
+            surface = Color.White,
+            surfaceVariant = Color(0xFFEAF0F5),
+            onSurface = Color(0xFF18232D),
+            onSurfaceVariant = Color(0xFF637381),
+            outline = Color(0xFFD8E1E8)
+        ),
+        shapes = Shapes(
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(20.dp),
+            large = RoundedCornerShape(28.dp)
         )
     ) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = Color.White,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    tonalElevation = 8.dp
+                ) {
                     AppTab.entries.forEach { item ->
                         NavigationBarItem(
                             selected = tab == item,
                             onClick = { tab = item },
-                            icon = { Text(when (item) { AppTab.HOME -> "⌂"; AppTab.DOWNLOADS -> "↓"; AppTab.SYNC -> "↻"; AppTab.PROFILE -> "●" }) },
+                            icon = {
+                                val image = when (item) {
+                                    AppTab.HOME -> Icons.Filled.Home
+                                    AppTab.DOWNLOADS -> Icons.Filled.Download
+                                    AppTab.SYNC -> Icons.Filled.Sync
+                                    AppTab.PROFILE -> Icons.Filled.Person
+                                }
+                                Icon(image, contentDescription = item.label)
+                            },
                             label = { Text(item.label) }
                         )
                     }
@@ -308,19 +338,27 @@ private fun HomePage(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("bilibilidl", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("BILIBILI VIDEO TOOL / KOTLIN", style = MaterialTheme.typography.labelSmall)
+                Text("bilibilidl", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary)
+                Text("BILIBILI VIDEO DOWNLOADER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick = onOpenProfile) { Text("B站登录 ↗") }
         }
-        Card {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("把喜欢的视频，认真保存下来。", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FC)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("把喜欢的视频，认真保存下来。", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color(0xFF124B67))
                 Text("支持 BV、AV、完整视频链接和 b23.tv 短链")
                 OutlinedTextField(value = input, onValueChange = onInput, modifier = Modifier.fillMaxWidth(),
                     label = { Text("视频链接 / BV号 / AV号") }, singleLine = true)
-                Button(onClick = { parseVideo() }, enabled = !busy && input.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                    Text(if (busy) "处理中…" else "解析视频")
+                Button(
+                    onClick = { parseVideo() },
+                    enabled = !busy && input.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(if (busy) "正在解析…" else "解析视频", style = MaterialTheme.typography.titleMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = autoPlay, onCheckedChange = { autoPlay = it })
@@ -498,7 +536,10 @@ private fun DownloadsPage(downloader: StreamDownloader) {
     fun contentUri(file: File) = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("已下载", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f)) {
+                Text("下载中心", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("管理任务、查看历史与本地文件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             TextButton(onClick = { files = downloader.localFiles(); message = "" }) { Text("刷新") }
         }
         Text("共 ${files.size} 个文件 · ${formatBytes(files.sumOf { it.length() })}", style = MaterialTheme.typography.bodySmall)
@@ -686,8 +727,8 @@ private fun SyncPage(api: BiliApi, cookie: String, onOpen: (VideoInfo) -> Unit) 
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("B站同步", style = MaterialTheme.typography.headlineMedium)
-        Text("观看历史 · 收藏夹 · 全站搜索", style = MaterialTheme.typography.bodySmall)
+        Text("内容同步", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("观看历史 · 收藏夹 · 全站搜索", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(value = keyword, onValueChange = { keyword = it }, modifier = Modifier.fillMaxWidth(), label = { Text("搜索视频标题或 UP 主") }, singleLine = true)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("history" to "历史记录", "favorites" to "收藏夹", "online" to "B站搜索").forEach { (key, label) ->
@@ -727,7 +768,7 @@ private fun ProfilePage(
     val files = remember { File(context.filesDir, "downloads").listFiles()?.filter { it.isFile && it.length() > 0 }.orEmpty() }
     val total = files.sumOf { it.length() }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("我的", style = MaterialTheme.typography.headlineMedium)
+        Text("个人中心", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Card {
             Column(Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (profile?.avatar?.isNotBlank() == true) AsyncImage(model = profile.avatar, contentDescription = "头像", modifier = Modifier.size(72.dp))
