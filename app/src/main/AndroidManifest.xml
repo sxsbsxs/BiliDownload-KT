@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="tv.danmaku.bili" />
+    </queries>
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- The app does not require camera, GPS, NFC, telephony, or other optional hardware. -->
