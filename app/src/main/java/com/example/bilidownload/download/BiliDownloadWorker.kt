@@ -103,6 +103,7 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             }
             downloader.cleanupTaskArtifacts(taskId)
             taskFile.delete()
+            java.io.File(applicationContext.filesDir, "download_tasks/$taskId.meta.json").delete()
             DownloadHistoryStore(applicationContext).record(
                 inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty(), title,
                 inputData.getString(DownloadWork.KEY_MODE) ?: "VIDEO", output, System.currentTimeMillis()

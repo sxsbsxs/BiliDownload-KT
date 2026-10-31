@@ -75,7 +75,7 @@ object DownloadWork {
             .setInputData(input)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
-            .addTag(TAG).build()
+            .addTag(TAG).addTag("bili-task-${input.getString(KEY_TASK_ID).orEmpty()}").build()
         val taskId = input.getString(KEY_TASK_ID) ?: request.id.toString()
         WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${taskId}", ExistingWorkPolicy.REPLACE, request)
     }
