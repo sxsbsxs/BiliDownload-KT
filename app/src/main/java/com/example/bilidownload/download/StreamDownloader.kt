@@ -329,6 +329,15 @@ class StreamDownloader(private val context: Context) {
         return exportToPublicDownloads(file)
     }
 
+    /** Delete only files owned by this app private downloads directory. */
+    fun deleteLocalFile(file: File): Boolean {
+        val root = File(context.filesDir, "downloads").canonicalFile
+        val target = file.canonicalFile
+        require(target.parentFile == root) { "只能删除应用下载目录中的文件" }
+        require(target.isFile) { "文件不存在或不是普通文件" }
+        return target.delete()
+    }
+
     fun localFiles(): List<File> {
         val folder = File(context.filesDir, "downloads")
         if (!folder.exists()) return emptyList()

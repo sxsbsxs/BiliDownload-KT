@@ -462,42 +462,63 @@ private fun VideoActions(api: BiliApi, video: VideoInfo, cookie: String, onMessa
 @Composable
 private fun DownloadsPage(downloader: StreamDownloader) {
     var files by remember { mutableStateOf(downloader.localFiles()) }
+    var pendingDelete by remember { mutableStateOf<File?>(null) }
+    var message by remember { mutableStateOf("") }
     val context = LocalContext.current
+    fun mimeType(file: File): String = when (file.extension.lowercase()) {
+        "mp4" -> "video/mp4"; "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"
+        "gif" -> "image/gif"; "webp" -> "image/webp"; "xml" -> "application/xml"; "srt" -> "text/plain"; else -> "*/*"
+    }
+    fun contentUri(file: File) = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("已下载", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-            TextButton(onClick = { files = downloader.localFiles() }) { Text("刷新") }
+            TextButton(onClick = { files = downloader.localFiles(); message = "" }) { Text("刷新") }
         }
+        Text("共 ${files.size} 个文件 · ${formatBytes(files.sumOf { it.length() })}", style = MaterialTheme.typography.bodySmall)
+        if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (files.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这里还空空的。解析并下载后，文件会显示在这里。") }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 items(files, key = { it.absolutePath }) { file ->
                     Card {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                Text("${formatBytes(file.length())} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                            Text("${formatBytes(file.length())} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                TextButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(contentUri(file), mimeType(file)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                                        .onFailure { message = it.message ?: "无法打开文件" }
+                                }) { Text("打开") }
+                                TextButton(onClick = {
+                                    runCatching {
+                                        val send = Intent(Intent.ACTION_SEND).apply { type = mimeType(file); putExtra(Intent.EXTRA_STREAM, contentUri(file)); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                                        context.startActivity(Intent.createChooser(send, "分享下载文件"))
+                                    }.onFailure { message = it.message ?: "无法分享文件" }
+                                }) { Text("分享") }
+                                TextButton(onClick = { pendingDelete = file }) { Text("删除", color = MaterialTheme.colorScheme.error) }
                             }
-                            TextButton(onClick = {
-                                runCatching {
-                                    val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", file)
-                                    val mime = when (file.extension.lowercase()) {
-                                        "mp4" -> "video/mp4"; "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"
-                                        "gif" -> "image/gif"; "webp" -> "image/webp"; "xml" -> "application/xml"
-                                        "srt" -> "text/plain"; else -> "*/*"
-                                    }
-                                    context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-                                }.onFailure { }
-                            }) { Text("打开") }
                         }
                     }
                 }
             }
         }
     }
+    pendingDelete?.let { file ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除本地文件？") },
+            text = { Text("将从应用本地下载列表中删除“${file.name}”。已导出到系统 Download 文件夹的副本不会自动删除。") },
+            confirmButton = { TextButton(onClick = {
+                val deleted = runCatching { downloader.deleteLocalFile(file) }.getOrDefault(false)
+                message = if (deleted) "已删除本地副本。" else "删除失败，文件可能已不存在。"
+                files = downloader.localFiles(); pendingDelete = null
+            }) { Text("删除", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+        )
+    }
 }
-
 @Composable
 private fun SyncPage(api: BiliApi, cookie: String, onOpen: (VideoInfo) -> Unit) {
     val scope = rememberCoroutineScope()
