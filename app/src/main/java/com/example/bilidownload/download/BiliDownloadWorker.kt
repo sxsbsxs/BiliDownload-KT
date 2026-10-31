@@ -40,14 +40,21 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             val cookie = CookieVault(applicationContext).read()
             val api = BiliApi()
             val downloader = StreamDownloader(applicationContext)
+            val taskId = inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty()
+            val minimumFree = if (mode == "VIDEO") 150L * 1024L * 1024L else 12L * 1024L * 1024L
+            if (downloader.availableSpaceBytes() < minimumFree) {
+                val needed = if (mode == "VIDEO") "150 MB" else "12 MB"
+                error("存储空间不足，请至少释放 $needed 后重试")
+            }
             val output = mutableListOf<String>()
             var lastProgressAt = System.currentTimeMillis()
             var lastProgressBytes = 0L
             pages.forEachIndexed { index, page ->
                 if (isStopped) return failure("任务已取消")
                 val path = when (mode) {
-                    "VIDEO" -> downloader.downloadVideo(api, video, page.cid, quality, cookie,
+                    "VIDEO" -> downloader.downloadVideo(api, video, page.cid, quality, cookie, taskId,
                         onProgress = { done, total ->
+                            if (downloader.availableSpaceBytes() < 24L * 1024L * 1024L) error("存储空间不足，已保留临时文件；释放空间后可恢复")
                             val local = if (total > 0) (done * 100 / total).toInt() else 0
                             val percent = ((index * 100 + local) / pages.size).coerceIn(0, 99)
                             val now = System.currentTimeMillis()
