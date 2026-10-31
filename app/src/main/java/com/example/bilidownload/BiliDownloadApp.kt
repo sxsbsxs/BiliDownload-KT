@@ -385,7 +385,7 @@ private fun HomePage(
             Card {
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("下载任务", fontWeight = FontWeight.Bold)
-                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(progress = progress / 100f, modifier = Modifier.fillMaxWidth())
                     Text(if (busy) "正在处理：${progress.toInt()}%" else "准备就绪 · Download/bilibilidl")
                     Button(onClick = { startDownload() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("开始下载") }
                     OutlinedButton(onClick = { cancelFlag = true }, enabled = busy, modifier = Modifier.fillMaxWidth()) { Text("取消当前任务") }
