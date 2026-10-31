@@ -24,6 +24,7 @@ import coil.compose.AsyncImage
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
 import com.example.bilidownload.download.StreamDownloader
+import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
 import kotlinx.coroutines.Dispatchers
@@ -196,7 +197,7 @@ private fun HomePage(
         showPlayer = false
         scope.launch {
             try {
-                val parsed = withContext(Dispatchers.IO) { api.getVideoInfo(input, cookie) }
+                val parsed = withContext(Dispatchers.IO) { api.getVideoInfo(PythonBridge.normalizeVideoInput(input), cookie) }
                 val pages = if (parsed.pages.isNotEmpty()) parsed.pages else listOf(VideoPage(parsed.cid, 1, parsed.title, parsed.durationSeconds))
                 val normalized = parsed.copy(pages = pages)
                 info = normalized

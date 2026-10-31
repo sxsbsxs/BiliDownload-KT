@@ -5,11 +5,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.download.StreamDownloader
+import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.security.CookieVault
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PythonBridge.initialize(applicationContext)
         val vault = CookieVault(this)
         val api = BiliApi()
         val downloader = StreamDownloader(this)
