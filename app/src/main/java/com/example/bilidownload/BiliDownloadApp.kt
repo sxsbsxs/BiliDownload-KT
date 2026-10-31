@@ -534,6 +534,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                         Text(detail, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         when (work.state) {
                             WorkInfo.State.RUNNING -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("暂停") }
+                            WorkInfo.State.ENQUEUED -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("移除队列") }
                             WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, work.inputData) }) { Text("继续") }
                             WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
                             else -> Unit

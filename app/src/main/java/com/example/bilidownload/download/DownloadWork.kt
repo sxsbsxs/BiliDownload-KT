@@ -30,7 +30,6 @@ object DownloadWork {
     const val KEY_SPEED = "speed"
     const val KEY_ETA = "eta"
     const val KEY_TASK_ID = "task_id"
-    const val QUEUE_NAME = "bili-download-serial-queue"
 
     fun enqueue(context: Context, video: VideoInfo, pages: List<VideoPage>, quality: Int, mode: String, subtitleLanguage: String) {
         require(pages.isNotEmpty()) { "没有可下载的分P" }
@@ -46,7 +45,7 @@ object DownloadWork {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()
-        WorkManager.getInstance(context).beginUniqueWork(QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request).enqueue()
+        WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${taskId}", ExistingWorkPolicy.KEEP, request)
     }
 
     fun resume(context: Context, input: androidx.work.Data) {
@@ -55,7 +54,8 @@ object DownloadWork {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()
-        WorkManager.getInstance(context).beginUniqueWork(QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request).enqueue()
+        val taskId = input.getString(KEY_TASK_ID) ?: request.id.toString()
+        WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${taskId}", ExistingWorkPolicy.REPLACE, request)
     }
 
     fun retry(context: Context, input: androidx.work.Data) = resume(context, input)
