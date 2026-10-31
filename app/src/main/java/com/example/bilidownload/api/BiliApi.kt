@@ -4,6 +4,7 @@ import com.example.bilidownload.model.*
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.FormBody
@@ -90,7 +91,7 @@ class BiliApi {
                 Regex("(?i)BV[0-9A-Za-z]{10}").find(html)?.value?.let { return "bvid" to it }
             }
         }
-        val parsed = runCatching { okhttp3.HttpUrl.get(if (value.startsWith("http")) value else "https://$value") }.getOrNull()
+        val parsed = runCatching { (if (value.startsWith("http")) value else "https://$value").toHttpUrl() }.getOrNull()
         if (parsed != null && parsed.host.endsWith("bilibili.com")) {
             Regex("(?i)BV[0-9A-Za-z]{10}").find(parsed.encodedPath)?.value?.let { return "bvid" to it }
             Regex("(?i)av(\\d+)").find(parsed.encodedPath)?.groupValues?.get(1)?.let { return "aid" to it }
