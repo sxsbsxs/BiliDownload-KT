@@ -14,12 +14,44 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+data class QrLoginState(val code: Int, val message: String, val cookie: String = "")
+
 class BiliApi {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
+
+
+    fun generateQrLogin(): Pair<String, String> {
+        val json = getJson("https://passport.bilibili.com/x/passport-login/web/qrcode/generate", "")
+        ensureSuccess(json)
+        val data = json.getJSONObject("data")
+        return data.getString("url") to data.getString("qrcode_key")
+    }
+
+    fun pollQrLogin(qrcodeKey: String): QrLoginState {
+        val url = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encode(qrcodeKey)}"
+        val request = Request.Builder().url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Referer", "https://www.bilibili.com/")
+            .header("Accept", "application/json, text/plain, */*").get().build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("扫码状态查询失败：HTTP ${response.code}")
+            val json = JSONObject(body)
+            val data = json.optJSONObject("data") ?: JSONObject()
+            val code = data.optInt("code", json.optInt("code", -1))
+            val message = data.optString("message", json.optString("message", ""))
+            if (code != 0) return QrLoginState(code, message)
+            val cookie = response.headers("Set-Cookie")
+                .map { it.substringBefore(";").trim() }
+                .filter { it.contains("=") }.distinct().joinToString("; ")
+            if (!cookie.contains("SESSDATA=")) return QrLoginState(-1, "B站没有返回有效登录凭据，请重新扫码。")
+            return QrLoginState(0, "登录成功", cookie)
+        }
+    }
 
     fun getVideoInfo(input: String, cookie: String): VideoInfo {
         val videoId = extractVideoId(input)
