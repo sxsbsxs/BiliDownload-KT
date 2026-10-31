@@ -28,6 +28,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.CookieManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import coil.ImageLoader
@@ -86,6 +90,8 @@ private fun BiliHome(
     var video by remember { mutableStateOf<VideoInfo?>(null) }
     var selectedCid by remember { mutableLongStateOf(0L) }
     var quality by remember { mutableIntStateOf(80) }
+    var qualityChoices by remember { mutableStateOf(emptyList<com.example.bilidownload.model.StreamChoice>()) }
+    var showLogin by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("粘贴 B站视频链接或 BV 号开始解析。") }
     val scope = rememberCoroutineScope()
@@ -99,6 +105,45 @@ private fun BiliHome(
     ) {
         Text("BiliDownload KT", style = MaterialTheme.typography.headlineMedium)
         Text("Kotlin · Jetpack Compose · B站视频与封面下载")
+
+        OutlinedButton(onClick = { showLogin = !showLogin }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (showLogin) "返回下载页面" else "哔哩哔哩扫码登录")
+        }
+        if (showLogin) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("扫码登录", style = MaterialTheme.typography.titleLarge)
+                    Text("以下为哔哩哔哩官方登录页面。请在官方页面扫码，并在手机上确认登录。")
+                    AndroidView(
+                        factory = { ctx -> WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            CookieManager.getInstance().setAcceptCookie(true)
+                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                            webViewClient = WebViewClient()
+                            loadUrl("https://passport.bilibili.com/login")
+                        } },
+                        modifier = Modifier.fillMaxWidth().height(480.dp)
+                    )
+                    Button(onClick = {
+                        val manager = CookieManager.getInstance()
+                        val webCookie = listOf(
+                            manager.getCookie("https://www.bilibili.com"),
+                            manager.getCookie("https://passport.bilibili.com")
+                        ).filterNotNull().flatMap { it.split(";") }.map { it.trim() }
+                            .filter { it.contains("=") }.distinct().joinToString("; ")
+                        if (webCookie.contains("SESSDATA=")) {
+                            cookie = webCookie
+                            onSaveCookie(webCookie)
+                            showLogin = false
+                            status = "已从哔哩哔哩官方登录页面读取登录状态并加密保存在本机。"
+                        } else {
+                            status = "暂未读取到有效登录态。请确认已在官方页面完成扫码和授权，再点一次。"
+                        }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("我已登录，保存账号") }
+                }
+            }
+        }
 
         OutlinedTextField(
             value = input,
@@ -137,7 +182,11 @@ private fun BiliHome(
                             }
                             video = parsed
                             selectedCid = parsed.pages.firstOrNull()?.cid ?: parsed.cid
-                            status = "解析成功。请选择分P和画质。"
+                            qualityChoices = try {
+                                withContext(Dispatchers.IO) { api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities }
+                            } catch (_: Exception) { emptyList() }
+                            quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
+                            status = if (qualityChoices.isNotEmpty()) "解析成功。已读取该视频和账号当前可用的画质。" else "视频信息解析成功，但暂时无法读取可用画质；请检查登录状态或视频权限。"
                         } catch (e: Exception) {
                             status = e.message ?: "解析失败，请检查链接或 Cookie。"
                         } finally {
@@ -227,31 +276,30 @@ private fun BiliHome(
             }
 
             Text("画质", style = MaterialTheme.typography.titleMedium)
-            val qualities = listOf(
-                127 to "8K", 126 to "杜比视界", 125 to "HDR", 120 to "4K",
-                116 to "1080P 60帧", 112 to "1080P+", 80 to "1080P",
-                64 to "720P", 32 to "480P", 16 to "360P"
-            )
-            qualities.chunked(2).forEach { pair ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    pair.forEach { (qn, label) ->
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = quality == qn, onClick = { quality = qn })
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
+            if (qualityChoices.isEmpty()) {
+                Text("暂未获取到该视频可用的画质列表。请先扫码登录，或确认视频是否有播放权限。")
+            } else {
+                qualityChoices.chunked(2).forEach { pair ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        pair.forEach { choice ->
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = quality == choice.quality, onClick = { quality = choice.quality })
+                                Text(choice.description, style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
                     }
-                    if (pair.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
 
             Button(
-                enabled = !busy,
+                enabled = !busy && qualityChoices.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     busy = true
