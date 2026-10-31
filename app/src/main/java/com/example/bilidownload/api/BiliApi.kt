@@ -29,7 +29,7 @@ class BiliApi {
     fun normalizeCookie(raw: String): String = raw.trim()
         .removePrefix("Cookie:").removePrefix("cookie:")
         .replace("\\r", "").replace("\\n", "").trim()
-        .removeSurrounding("\\"")
+        .removeSurrounding("\"")
 
     private fun request(url: String, cookie: String = "", referer: String = "https://www.bilibili.com/"): JSONObject {
         val builder = Request.Builder().url(url)
