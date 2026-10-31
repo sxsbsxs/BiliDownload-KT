@@ -101,6 +101,7 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                     .putString(DownloadWork.KEY_TITLE, title).putString(DownloadWork.KEY_MESSAGE, message).build())
                 setForeground(foreground(title, message))
             }
+            downloader.cleanupTaskArtifacts(taskId)
             taskFile.delete()
             DownloadHistoryStore(applicationContext).record(
                 inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty(), title,
@@ -111,7 +112,7 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         } catch (e: Exception) {
             if (isStopped) return failure("任务已取消")
             val message = e.message ?: e.javaClass.simpleName
-            if (runAttemptCount < 3 && isTransient(e, message)) {
+            if (runAttemptCount < 5 && isTransient(e, message)) {
                 setProgress(Data.Builder().putString(DownloadWork.KEY_TITLE, title)
                     .putString(DownloadWork.KEY_MESSAGE, "网络异常，准备自动重试（${runAttemptCount + 1}/3）")
                     .putString(DownloadWork.KEY_ERROR, message).build())
@@ -124,8 +125,8 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
     private fun isTransient(error: Throwable, message: String): Boolean {
         val lower = message.lowercase()
         return error is IOException || error is SocketTimeoutException || error is UnknownHostException ||
-            listOf("http 5", "timeout", "timed out", "connection", "网络", "socket", "temporarily unavailable")
-                .any { lower.contains(it) }
+            listOf("http 429", "http 5", "too many requests", "限流", "timeout", "timed out",
+                "connection", "网络", "socket", "temporarily unavailable").any { lower.contains(it) }
     }
 
     private fun failure(message: String) = Result.failure(Data.Builder().putString(DownloadWork.KEY_ERROR, message).build())

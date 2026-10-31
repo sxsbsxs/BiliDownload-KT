@@ -48,6 +48,11 @@ class DownloadHistoryStore(context: Context) : SQLiteOpenHelper(context, "downlo
     }
 
     @Synchronized
+    fun delete(taskId: String) {
+        writableDatabase.delete("downloads", "task_id = ?", arrayOf(taskId))
+    }
+
+    @Synchronized
     fun clear() {
         writableDatabase.delete("downloads", null, null)
     }

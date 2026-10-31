@@ -33,6 +33,7 @@ import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
 import com.example.bilidownload.download.StreamDownloader
 import com.example.bilidownload.download.DownloadWork
+import com.example.bilidownload.download.DownloadHistoryStore
 import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
@@ -577,20 +578,26 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                     TextButton(onClick = { DownloadHistoryStore(context).clear(); history = emptyList() }) { Text("清空") }
                 }
                 history.filter { it.title.contains(taskQuery, true) }.take(50).forEach { item ->
-                    Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    Text("${item.mode} · ${item.files.size} 个文件 · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(item.createdAt))}",
-                        style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            Text("${item.mode} · ${item.files.size} 个文件 · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(item.createdAt))}",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = { DownloadHistoryStore(context).delete(item.taskId); history = DownloadHistoryStore(context).list() }) { Text("删除记录") }
+                    }
                     item.files.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall, maxLines = 1) }
                     Divider()
                 }
             }
         }
         if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        if (files.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这里还空空的。解析并下载后，文件会显示在这里。") }
+        val visibleFiles = files.filter { it.name.contains(taskQuery, true) }
+        if (visibleFiles.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (taskQuery.isBlank()) "这里还空空的。解析并下载后，文件会显示在这里。" else "没有匹配的本地文件。") }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                items(files, key = { it.absolutePath }) { file ->
+                items(visibleFiles, key = { it.absolutePath }) { file ->
                     Card {
                         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)

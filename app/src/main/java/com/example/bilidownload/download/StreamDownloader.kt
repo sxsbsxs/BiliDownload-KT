@@ -402,6 +402,17 @@ class StreamDownloader(private val context: Context) {
         return target.delete()
     }
 
+    fun cleanupTaskArtifacts(taskId: String) {
+        if (taskId.isBlank()) return
+        val prefix = taskId.take(8) + "_"
+        val folder = File(context.filesDir, "downloads")
+        folder.listFiles()?.filter { file ->
+            file.name.contains(prefix) && (file.name.endsWith(".part") ||
+                file.name.endsWith(".meta") || file.name.endsWith(".video.m4s") ||
+                file.name.endsWith(".audio.m4s"))
+        }?.forEach { it.delete() }
+    }
+
     fun availableSpaceBytes(): Long = android.os.StatFs(context.filesDir.absolutePath).availableBytes
 
     fun localFiles(): List<File> {
