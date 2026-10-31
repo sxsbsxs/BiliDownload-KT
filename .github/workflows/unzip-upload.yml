@@ -148,6 +148,11 @@ jobs:
                       if not parts:
                           continue
 
+                      # Never import GitHub settings or workflows from the ZIP.
+                      if parts[0] in (".github", ".git"):
+                          print("Skipping protected path:", "/".join(parts))
+                          continue
+
                       target = root.joinpath(*parts)
                       resolved = target.resolve()
 
@@ -194,6 +199,7 @@ jobs:
           check_any settings.gradle settings.gradle.kts
           check_any build.gradle build.gradle.kts
           check_any app/build.gradle app/build.gradle.kts
+
           test -f app/src/main/AndroidManifest.xml
 
           echo "All Android project files found."
@@ -218,6 +224,16 @@ jobs:
 
           git remote set-url origin \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Fetch the latest remote branch before staging changes.
+          git fetch origin "$TARGET_BRANCH"
+
+          # Preserve all GitHub configuration and workflow files from the remote.
+          if git ls-tree -d --name-only "origin/$TARGET_BRANCH" -- .github | grep -qx '.github'; then
+            git restore --source="origin/$TARGET_BRANCH" --staged --worktree -- .github
+          else
+            rm -rf .github
+          fi
 
           git add -A
 
