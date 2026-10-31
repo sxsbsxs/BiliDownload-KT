@@ -212,6 +212,7 @@ class StreamDownloader(private val context: Context) {
         cid: Long,
         quality: Int,
         cookie: String,
+        taskId: String = "",
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         isCancelled: () -> Boolean = { false }
     ): String {
@@ -219,8 +220,8 @@ class StreamDownloader(private val context: Context) {
         val folder = File(context.filesDir, "downloads").apply { if (!exists()) mkdirs() }
         val title = info.title.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]+"), "_")
             .trim().take(100).ifBlank { "bilibili_video" }
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val output = uniqueFile(folder, "${title}_${stamp}.mp4")
+        val stamp = if (taskId.isNotBlank()) taskId.take(12) else SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val output = if (taskId.isNotBlank()) File(folder, "${title}_${stamp}.mp4") else uniqueFile(folder, "${title}_${stamp}.mp4")
         val http = OkHttpClient.Builder().connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).followRedirects(true).build()
         fun download(urls: List<String>, target: File) {
@@ -229,21 +230,39 @@ class StreamDownloader(private val context: Context) {
                 if (isCancelled()) error("下载已取消")
                 try {
                     val part = File(target.parentFile, target.name + ".part")
+                    val meta = File(part.parentFile, part.name + ".meta")
                     var offset = if (part.exists()) part.length() else 0L
+                    val savedMeta = runCatching { org.json.JSONObject(meta.readText()) }.getOrNull()
+                    if (offset > 0L && savedMeta?.optString("url") != url) {
+                        part.delete(); meta.delete(); offset = 0L
+                    }
                     val builder = Request.Builder().url(url)
                         .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36")
                         .header("Referer", "https://www.bilibili.com/")
                         .header("Accept", "*/*")
                     val normalized = api.normalizeCookie(cookie)
                     if (normalized.isNotBlank()) builder.header("Cookie", normalized)
-                    if (offset > 0) builder.header("Range", "bytes=$offset-")
+                    if (offset > 0) {
+                        builder.header("Range", "bytes=$offset-")
+                        val validator = savedMeta?.optString("etag").orEmpty().ifBlank { savedMeta?.optString("last_modified").orEmpty() }
+                        if (validator.isNotBlank()) builder.header("If-Range", validator)
+                    }
                     http.newCall(builder.get().build()).execute().use { response ->
                         if (offset > 0 && response.code != 206) {
-                            part.delete()
-                            offset = 0
+                            part.delete(); meta.delete(); offset = 0
                         }
+                        if (offset > 0 && response.code == 206 &&
+                            !response.header("Content-Range").orEmpty().startsWith("bytes $offset-")) {
+                            part.delete(); meta.delete()
+                            error("服务器返回的断点续传范围不匹配，请重试")
+                        }
+                        if (response.code == 206 && offset == 0L) error("服务器意外返回分段响应")
                         if (!response.isSuccessful) error("HTTP ${response.code}")
                         val body = response.body ?: error("空响应")
+                        org.json.JSONObject().put("url", url)
+                            .put("etag", response.header("ETag").orEmpty())
+                            .put("last_modified", response.header("Last-Modified").orEmpty())
+                            .also { meta.writeText(it.toString()) }
                         val total = body.contentLength().coerceAtLeast(0) + offset
                         var done = offset
                         FileOutputStream(part, offset > 0).use { out ->
@@ -263,6 +282,7 @@ class StreamDownloader(private val context: Context) {
                         if (part.length() <= 0) error("下载文件为空")
                         if (target.exists()) target.delete()
                         if (!part.renameTo(target)) error("无法完成临时文件重命名")
+                        meta.delete()
                         return
                     }
                 } catch (e: Exception) {
@@ -351,6 +371,8 @@ class StreamDownloader(private val context: Context) {
         require(target.isFile) { "文件不存在或不是普通文件" }
         return target.delete()
     }
+
+    fun availableSpaceBytes(): Long = android.os.StatFs(context.filesDir.absolutePath).availableBytes
 
     fun localFiles(): List<File> {
         val folder = File(context.filesDir, "downloads")
