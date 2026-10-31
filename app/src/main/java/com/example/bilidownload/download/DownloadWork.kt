@@ -8,6 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.BackoffPolicy
 import java.util.concurrent.TimeUnit
 import java.util.UUID
+import java.io.File
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.bilidownload.model.VideoInfo
@@ -40,8 +41,10 @@ object DownloadWork {
             .put("owner", video.owner).put("duration", video.durationSeconds).put("cover", video.coverUrl)
             .put("pages", pageArray).toString()
         val taskId = UUID.randomUUID().toString()
+        val taskFolder = File(context.filesDir, "download_tasks").apply { mkdirs() }
+        File(taskFolder, "$taskId.json").writeText(payload)
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
-            .setInputData(workDataOf(KEY_TITLE to video.title, KEY_VIDEO to payload, KEY_MODE to mode,
+            .setInputData(workDataOf(KEY_TITLE to video.title, KEY_MODE to mode,
                 KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId, KEY_CREATED_AT to System.currentTimeMillis()))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)

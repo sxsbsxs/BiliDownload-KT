@@ -25,7 +25,11 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
         val title = inputData.getString(DownloadWork.KEY_TITLE) ?: "B站视频"
         return try {
             setForeground(foreground(title, "正在准备下载"))
-            val json = JSONObject(inputData.getString(DownloadWork.KEY_VIDEO) ?: error("任务数据缺失"))
+            val taskId = inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty()
+            val taskFile = java.io.File(applicationContext.filesDir, "download_tasks/$taskId.json")
+            val payload = if (taskFile.isFile) taskFile.readText()
+                else inputData.getString(DownloadWork.KEY_VIDEO) ?: error("任务数据缺失")
+            val json = JSONObject(payload)
             val pagesJson = json.getJSONArray("pages")
             val pages = (0 until pagesJson.length()).map { i ->
                 val p = pagesJson.getJSONObject(i)
@@ -40,7 +44,6 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             val cookie = CookieVault(applicationContext).read()
             val api = BiliApi()
             val downloader = StreamDownloader(applicationContext)
-            val taskId = inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty()
             val minimumFree = if (mode == "VIDEO") 150L * 1024L * 1024L else 12L * 1024L * 1024L
             if (downloader.availableSpaceBytes() < minimumFree) {
                 val needed = if (mode == "VIDEO") "150 MB" else "12 MB"
@@ -98,6 +101,7 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                     .putString(DownloadWork.KEY_TITLE, title).putString(DownloadWork.KEY_MESSAGE, message).build())
                 setForeground(foreground(title, message))
             }
+            taskFile.delete()
             Result.success(Data.Builder().putStringArray(DownloadWork.KEY_FILES, output.toTypedArray())
                 .putInt(DownloadWork.KEY_PROGRESS, 100).putString(DownloadWork.KEY_TITLE, title).build())
         } catch (e: Exception) {
