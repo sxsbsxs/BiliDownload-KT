@@ -220,7 +220,7 @@ class StreamDownloader(private val context: Context) {
         val title = info.title.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]+"), "_")
             .trim().take(100).ifBlank { "bilibili_video" }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val output = File(folder, "${title}_${stamp}.mp4")
+        val output = uniqueFile(folder, "${title}_${stamp}.mp4")
         val http = OkHttpClient.Builder().connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).followRedirects(true).build()
         fun download(urls: List<String>, target: File) {
@@ -310,7 +310,8 @@ class StreamDownloader(private val context: Context) {
             .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
             .get().build()
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
-        val target = File(folder, displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        val safeName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val target = uniqueFile(folder, safeName)
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("资源下载失败 HTTP ${response.code}")
             val bytes = response.body?.bytes() ?: error("资源内容为空")
@@ -323,10 +324,23 @@ class StreamDownloader(private val context: Context) {
     fun saveText(displayName: String, text: String): String {
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
         val safe = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val file = File(folder, safe)
+        val file = uniqueFile(folder, safe)
         file.writeText(text, Charsets.UTF_8)
         if (!file.isFile || file.length() <= 0) error("保存文本文件失败")
         return exportToPublicDownloads(file)
+    }
+
+    private fun uniqueFile(folder: File, requestedName: String): File {
+        val requested = File(folder, requestedName)
+        if (!requested.exists()) return requested
+        val base = requested.nameWithoutExtension
+        val ext = requested.extension
+        var index = 2
+        while (true) {
+            val candidate = File(folder, if (ext.isBlank()) "$base ($index)" else "$base ($index).$ext")
+            if (!candidate.exists()) return candidate
+            index++
+        }
     }
 
     /** Delete only files owned by this app private downloads directory. */

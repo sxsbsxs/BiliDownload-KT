@@ -3,6 +3,10 @@ package com.example.bilidownload.download
 import android.content.Context
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.BackoffPolicy
+import java.util.concurrent.TimeUnit
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.bilidownload.model.VideoInfo
@@ -22,6 +26,8 @@ object DownloadWork {
     const val KEY_MESSAGE = "message"
     const val KEY_ERROR = "error"
     const val KEY_FILES = "files"
+    const val KEY_SPEED = "speed"
+    const val KEY_ETA = "eta"
 
     fun enqueue(context: Context, video: VideoInfo, pages: List<VideoPage>, quality: Int, mode: String, subtitleLanguage: String) {
         require(pages.isNotEmpty()) { "没有可下载的分P" }
@@ -33,7 +39,18 @@ object DownloadWork {
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
             .setInputData(workDataOf(KEY_TITLE to video.title, KEY_VIDEO to payload, KEY_MODE to mode,
                 KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality))
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()
         WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${request.id}", ExistingWorkPolicy.KEEP, request)
+    }
+
+    fun retry(context: Context, input: androidx.work.Data) {
+        val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
+            .setInputData(input)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
+            .addTag(TAG).build()
+        WorkManager.getInstance(context).enqueue(request)
     }
 }

@@ -16,6 +16,9 @@ import com.example.bilidownload.model.VideoInfo
 import com.example.bilidownload.model.VideoPage
 import com.example.bilidownload.security.CookieVault
 import org.json.JSONObject
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 class BiliDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -38,6 +41,8 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             val api = BiliApi()
             val downloader = StreamDownloader(applicationContext)
             val output = mutableListOf<String>()
+            var lastProgressAt = System.currentTimeMillis()
+            var lastProgressBytes = 0L
             pages.forEachIndexed { index, page ->
                 if (isStopped) return failure("任务已取消")
                 val path = when (mode) {
@@ -45,8 +50,17 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                         onProgress = { done, total ->
                             val local = if (total > 0) (done * 100 / total).toInt() else 0
                             val percent = ((index * 100 + local) / pages.size).coerceIn(0, 99)
+                            val now = System.currentTimeMillis()
+                            val elapsed = (now - lastProgressAt).coerceAtLeast(1L)
+                            val speed = ((done - lastProgressBytes).coerceAtLeast(0L) * 1000L / elapsed)
+                            if (elapsed >= 1000L) {
+                                lastProgressAt = now
+                                lastProgressBytes = done
+                            }
+                            val eta = if (speed > 0 && total > done) (total - done) / speed else -1L
                             val message = "正在下载 P${page.page}"
                             setProgressAsync(Data.Builder().putInt(DownloadWork.KEY_PROGRESS, percent)
+                                .putLong(DownloadWork.KEY_SPEED, speed).putLong(DownloadWork.KEY_ETA, eta)
                                 .putString(DownloadWork.KEY_TITLE, title).putString(DownloadWork.KEY_MESSAGE, message).build())
                             setForegroundAsync(foreground(title, "$message · $percent%"))
                         }, isCancelled = { isStopped })
@@ -79,8 +93,23 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             Result.success(Data.Builder().putStringArray(DownloadWork.KEY_FILES, output.toTypedArray())
                 .putInt(DownloadWork.KEY_PROGRESS, 100).putString(DownloadWork.KEY_TITLE, title).build())
         } catch (e: Exception) {
-            failure(if (isStopped) "任务已取消" else (e.message ?: "下载失败"))
+            if (isStopped) return failure("任务已取消")
+            val message = e.message ?: e.javaClass.simpleName
+            if (runAttemptCount < 3 && isTransient(e, message)) {
+                setProgress(Data.Builder().putString(DownloadWork.KEY_TITLE, title)
+                    .putString(DownloadWork.KEY_MESSAGE, "网络异常，准备自动重试（${runAttemptCount + 1}/3）")
+                    .putString(DownloadWork.KEY_ERROR, message).build())
+                return Result.retry()
+            }
+            failure(message)
         }
+    }
+
+    private fun isTransient(error: Throwable, message: String): Boolean {
+        val lower = message.lowercase()
+        return error is IOException || error is SocketTimeoutException || error is UnknownHostException ||
+            listOf("http 5", "timeout", "timed out", "connection", "网络", "socket", "temporarily unavailable")
+                .any { lower.contains(it) }
     }
 
     private fun failure(message: String) = Result.failure(Data.Builder().putString(DownloadWork.KEY_ERROR, message).build())

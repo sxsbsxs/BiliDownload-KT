@@ -467,6 +467,12 @@ private fun VideoActions(api: BiliApi, video: VideoInfo, cookie: String, onMessa
     }
 }
 
+private fun formatRate(bytesPerSecond: Long): String = when {
+    bytesPerSecond >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB/s", bytesPerSecond / (1024.0 * 1024.0))
+    bytesPerSecond >= 1024L -> String.format(Locale.US, "%.0f KB/s", bytesPerSecond / 1024.0)
+    else -> "$bytesPerSecond B/s"
+}
+
 @Composable
 private fun DownloadsPage(downloader: StreamDownloader) {
     var files by remember { mutableStateOf(downloader.localFiles()) }
@@ -492,21 +498,35 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                 delay(1000)
             }
         }
-        val visibleTasks = workInfos.filter { it.state != WorkInfo.State.SUCCEEDED && it.state != WorkInfo.State.CANCELLED }
+        val visibleTasks = workInfos.take(20)
         if (visibleTasks.isNotEmpty()) Card {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("后台下载任务", fontWeight = FontWeight.Bold)
                 visibleTasks.forEach { work ->
                     val title = work.progress.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
                     val percent = work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
-                    val message = work.progress.getString(DownloadWork.KEY_MESSAGE)
-                        ?: if (work.state == WorkInfo.State.ENQUEUED) "排队中" else work.state.name
+                    val message = when (work.state) {
+                        WorkInfo.State.SUCCEEDED -> "已完成"
+                        WorkInfo.State.FAILED -> work.outputData.getString(DownloadWork.KEY_ERROR) ?: "下载失败"
+                        WorkInfo.State.CANCELLED -> "已取消"
+                        WorkInfo.State.ENQUEUED -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "排队中 / 等待网络"
+                        else -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "正在处理"
+                    }
+                    val speed = work.progress.getLong(DownloadWork.KEY_SPEED, 0L)
+                    val eta = work.progress.getLong(DownloadWork.KEY_ETA, -1L)
                     Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     LinearProgressIndicator(progress = percent / 100f, modifier = Modifier.fillMaxWidth())
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("$message · $percent%", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { WorkManager.getInstance(context).cancelWorkById(work.id) },
-                            enabled = work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) { Text("取消") }
+                        val detail = if (work.state == WorkInfo.State.RUNNING && speed > 0L)
+                            "$message · $percent% · ${formatRate(speed)}" + if (eta >= 0L) " · 剩余约 ${eta}秒" else ""
+                        else "$message · $percent%"
+                        Text(detail, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        if (work.state == WorkInfo.State.FAILED) {
+                            TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
+                        } else {
+                            TextButton(onClick = { WorkManager.getInstance(context).cancelWorkById(work.id) },
+                                enabled = work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) { Text("取消") }
+                        }
                     }
                 }
             }
