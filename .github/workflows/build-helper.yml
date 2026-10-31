@@ -6,6 +6,7 @@ on:
     paths:
       - "app/**"
       - "*.gradle"
+      - "*.gradle.kts"
       - "gradle.properties"
       - ".github/workflows/build-helper.yml"
 
@@ -59,32 +60,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Project file list:"
-          find . -maxdepth 10 -type f | sort
+          check_any() {
+            for file in "$@"; do
+              if [ -f "$file" ]; then
+                echo "FOUND: $file"
+                return 0
+              fi
+            done
+            echo "MISSING: one of: $*"
+            return 1
+          }
 
-          required_files=(
-            settings.gradle
-            build.gradle
-            gradle.properties
-            app/build.gradle
-            app/src/main/AndroidManifest.xml
-          )
-
-          missing=0
-
-          for file in "${required_files[@]}"; do
-            if [ -f "$file" ]; then
-              echo "FOUND: $file"
-            else
-              echo "MISSING: $file"
-              missing=1
-            fi
-          done
-
-          if [ "$missing" -ne 0 ]; then
-            echo "BiliDownload-KT project files are incomplete."
-            exit 1
-          fi
+          check_any settings.gradle settings.gradle.kts
+          check_any build.gradle build.gradle.kts
+          test -f gradle.properties
+          check_any app/build.gradle app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
