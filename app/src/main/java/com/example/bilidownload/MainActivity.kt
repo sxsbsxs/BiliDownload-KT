@@ -9,9 +9,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.delay
 import android.os.Bundle
+import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,14 +35,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
-import android.webkit.CookieManager
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.decode.GifDecoder
@@ -49,7 +50,10 @@ import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.download.StreamDownloader
 import com.example.bilidownload.model.VideoInfo
 import com.example.bilidownload.security.CookieVault
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -100,6 +104,10 @@ private fun BiliHome(
     var qualityChoices by remember { mutableStateOf(emptyList<com.example.bilidownload.model.StreamChoice>()) }
     var showLogin by remember { mutableStateOf(false) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var qrKey by remember { mutableStateOf("") }
+    var loginMessage by remember { mutableStateOf("点击获取 B 站官方扫码二维码。") }
+    var loginBusy by remember { mutableStateOf(false) }
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qrTicket by remember { mutableStateOf<BiliApi.QrLoginTicket?>(null) }
     var qrStatus by remember { mutableStateOf("点击下方按钮获取官方扫码二维码") }
     var busy by remember { mutableStateOf(false) }
@@ -120,46 +128,77 @@ private fun BiliHome(
             Text(if (showLogin) "返回下载页面" else "哔哩哔哩扫码登录")
         }
 
+
         if (showLogin) {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Text("扫码登录", style = MaterialTheme.typography.titleLarge)
                     Text("哔哩哔哩", style = MaterialTheme.typography.headlineSmall)
-                    if (qrBitmap != null) Image(bitmap = qrBitmap!!.asImageBitmap(), contentDescription = "B站官方扫码登录二维码", modifier = Modifier.width(240.dp).height(240.dp))
-                    else Spacer(Modifier.height(240.dp))
-                    Text(qrStatus)
-                    Button(onClick = {
-                        qrBitmap = null
-                        qrTicket = null
-                        qrStatus = "正在获取官方二维码…"
-                        scope.launch {
-                            try {
-                                val ticket = withContext(Dispatchers.IO) { api.createQrLoginTicket() }
-                                val matrix = QRCodeWriter().encode(ticket.url, BarcodeFormat.QR_CODE, 640, 640, mapOf(EncodeHintType.MARGIN to 1))
-                                val bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888)
-                                for (x in 0 until 640) for (y in 0 until 640) bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-                                qrTicket = ticket
-                                qrBitmap = bitmap
-                                qrStatus = "请使用 B站手机客户端扫码"
-                                while (showLogin && qrTicket == ticket) {
-                                    delay(2000)
-                                    val result = withContext(Dispatchers.IO) { api.pollQrLogin(ticket) }
-                                    qrStatus = result.message
-                                    if (result.state == 0 && result.cookie.isNotBlank()) {
-                                        cookie = result.cookie
-                                        onSaveCookie(result.cookie)
-                                        qrStatus = "登录成功，账号已安全保存在本机"
-                                        showLogin = false
-                                        break
+                    if (qrBitmap != null) {
+                        Image(
+                            bitmap = qrBitmap!!.asImageBitmap(),
+                            contentDescription = "哔哩哔哩登录二维码",
+                            modifier = Modifier.size(240.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        Text("使用哔哩哔哩手机 App 扫码登录。")
+                    }
+                    Text(loginMessage, style = MaterialTheme.typography.bodyMedium)
+                    Button(
+                        enabled = !loginBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            loginBusy = true
+                            qrBitmap = null
+                            qrKey = ""
+                            loginMessage = "正在申请二维码…"
+                            scope.launch {
+                                try {
+                                    val pair = withContext(Dispatchers.IO) { api.generateQrLogin() }
+                                    qrKey = pair.second
+                                    val matrix = QRCodeWriter().encode(pair.first, BarcodeFormat.QR_CODE, 640, 640)
+                                    val bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888)
+                                    for (y in 0 until 640) for (x in 0 until 640) {
+                                        bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
                                     }
-                                    if (result.state == 86038) break
+                                    qrBitmap = bitmap
+                                    loginMessage = "请扫码，并在手机 B 站 App 上确认登录。"
+                                    while (qrKey.isNotBlank()) {
+                                        delay(2000)
+                                        val state = withContext(Dispatchers.IO) { api.pollQrLogin(qrKey) }
+                                        when (state.code) {
+                                            0 -> {
+                                                cookie = state.cookie
+                                                onSaveCookie(state.cookie)
+                                                loginMessage = "登录成功，登录状态已加密保存在本机。"
+                                                qrKey = ""
+                                                status = "B站扫码登录成功，可以开始获取画质并下载。"
+                                            }
+                                            86101 -> loginMessage = "等待扫码，请用 B 站 App 扫描二维码。"
+                                            86090 -> loginMessage = "已扫码，请在手机上确认登录。"
+                                            86038 -> {
+                                                loginMessage = "二维码已过期，请重新获取。"
+                                                qrKey = ""
+                                            }
+                                            else -> loginMessage = state.message.ifBlank { "正在等待扫码确认…" }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    loginMessage = e.message ?: "获取二维码失败，请稍后重试。"
+                                } finally {
+                                    loginBusy = false
                                 }
-                            } catch (e: Exception) {
-                                qrStatus = e.message ?: "二维码获取失败"
                             }
                         }
-                    }, modifier = Modifier.fillMaxWidth()) { Text(if (qrBitmap == null) "获取登录二维码" else "刷新二维码") }
-                    Text("扫码后请在 B站手机客户端确认授权。登录凭据将加密保存在本机。", style = MaterialTheme.typography.bodySmall)
+                    ) { Text(if (qrBitmap == null) "获取登录二维码" else "刷新二维码") }
+                    OutlinedButton(onClick = { showLogin = false }, modifier = Modifier.fillMaxWidth()) {
+                        Text("返回下载页面")
+                    }
                 }
             }
         }
@@ -175,8 +214,8 @@ private fun BiliHome(
         OutlinedTextField(
             value = cookie,
             onValueChange = { cookie = it },
-            label = { Text("B站 Cookie（可选）") },
-            placeholder = { Text("SESSDATA=...; bili_jct=...") },
+            label = { Text("B站 Cookie（扫码登录后自动填写）") },
+            placeholder = { Text("请先使用上方扫码登录") },
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation(),
             minLines = 2,
