@@ -148,10 +148,10 @@ class BiliApi {
         return raw.trim()
             .removePrefix("Cookie:")
             .removePrefix("cookie:")
-            .replace("\\r", "")
-            .replace("\\n", "")
+            .replace("\r", "")
+            .replace("\n", "")
             .trim()
-            .removeSurrounding("\\\"")
+            .removeSurrounding("\"")
     }
 
     private fun extractBvid(input: String): String {
