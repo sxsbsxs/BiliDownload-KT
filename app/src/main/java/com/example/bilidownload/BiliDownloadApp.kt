@@ -22,7 +22,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.work.getWorkInfosByTagFlow
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
@@ -503,21 +502,42 @@ private fun DownloadsPage(downloader: StreamDownloader) {
         }
         Text("共 ${files.size} 个文件 · ${formatBytes(files.sumOf { it.length() })}", style = MaterialTheme.typography.bodySmall)
         var workInfos by remember { mutableStateOf(emptyList<WorkInfo>()) }
+        var taskQuery by remember { mutableStateOf("") }
+        var selectedTaskIds by remember { mutableStateOf(setOf<String>()) }
+        var history by remember { mutableStateOf(DownloadHistoryStore(context).list()) }
         LaunchedEffect(Unit) {
             val manager = WorkManager.getInstance(context)
             while (true) {
-                manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { workInfos = it }
+                workInfos = withContext(Dispatchers.IO) { manager.getWorkInfosByTag(DownloadWork.TAG).get() }
+                history = withContext(Dispatchers.IO) { DownloadHistoryStore(context).list() }
+                delay(1500)
             }
         }
-        val visibleTasks = workInfos.sortedByDescending { it.inputData.getLong(DownloadWork.KEY_CREATED_AT, 0L) }.take(30)
-        if (visibleTasks.isNotEmpty()) Card {
+        val visibleTasks = workInfos.sortedByDescending { it.inputData.getLong(DownloadWork.KEY_CREATED_AT, 0L) }
+            .filter { (it.progress.getString(DownloadWork.KEY_TITLE) ?: it.inputData.getString(DownloadWork.KEY_TITLE) ?: "").contains(taskQuery, true) }
+            .take(50)
+        if (workInfos.isNotEmpty()) Card {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("后台下载任务", fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = taskQuery, onValueChange = { taskQuery = it }, label = { Text("搜索任务") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { selectedTaskIds = visibleTasks.map { it.id.toString() }.toSet() }) { Text("全选当前列表") }
+                    TextButton(onClick = {
+                        visibleTasks.filter { it.id.toString() in selectedTaskIds }.forEach { work ->
+                            if (work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) DownloadWork.pause(context, work.id)
+                        }
+                        selectedTaskIds = emptySet()
+                    }) { Text("批量暂停") }
+                    TextButton(onClick = {
+                        visibleTasks.filter { it.id.toString() in selectedTaskIds && (it.state == WorkInfo.State.CANCELLED || it.state == WorkInfo.State.FAILED) }
+                            .forEach { DownloadWork.resume(context, it.inputData) }
+                        selectedTaskIds = emptySet()
+                    }) { Text("批量继续") }
+                }
                 visibleTasks.forEach { work ->
                     val title = work.progress.getString(DownloadWork.KEY_TITLE)
                         ?: work.inputData.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
-                    val percent = if (work.state == WorkInfo.State.SUCCEEDED) 100
-                        else work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
+                    val percent = if (work.state == WorkInfo.State.SUCCEEDED) 100 else work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
                     val message = when (work.state) {
                         WorkInfo.State.SUCCEEDED -> "已完成"
                         WorkInfo.State.FAILED -> work.outputData.getString(DownloadWork.KEY_ERROR) ?: "下载失败"
@@ -527,21 +547,41 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                     }
                     val speed = work.progress.getLong(DownloadWork.KEY_SPEED, 0L)
                     val eta = work.progress.getLong(DownloadWork.KEY_ETA, -1L)
-                    Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    LinearProgressIndicator(progress = percent / 100f, modifier = Modifier.fillMaxWidth())
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        val detail = if (work.state == WorkInfo.State.RUNNING && speed > 0L)
-                            "$message · $percent% · ${formatRate(speed)}" + if (eta >= 0L) " · 剩余约 ${eta}秒" else ""
-                        else "$message · $percent%"
-                        Text(detail, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Checkbox(checked = work.id.toString() in selectedTaskIds, onCheckedChange = { checked ->
+                            selectedTaskIds = if (checked) selectedTaskIds + work.id.toString() else selectedTaskIds - work.id.toString()
+                        })
+                        Column(Modifier.weight(1f)) {
+                            Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxWidth())
+                            val detail = if (work.state == WorkInfo.State.RUNNING && speed > 0L)
+                                "$message · $percent% · ${formatRate(speed)}" + if (eta >= 0L) " · 剩余约 ${eta}秒" else ""
+                            else "$message · $percent%"
+                            Text(detail, style = MaterialTheme.typography.bodySmall)
+                        }
                         when (work.state) {
                             WorkInfo.State.RUNNING -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("暂停") }
-                            WorkInfo.State.ENQUEUED -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("移除队列") }
+                            WorkInfo.State.ENQUEUED -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("移除") }
                             WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, work.inputData) }) { Text("继续") }
                             WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
                             else -> Unit
                         }
                     }
+                }
+            }
+        }
+        if (history.isNotEmpty()) Card {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("下载历史（本机保存）", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { DownloadHistoryStore(context).clear(); history = emptyList() }) { Text("清空") }
+                }
+                history.filter { it.title.contains(taskQuery, true) }.take(50).forEach { item ->
+                    Text(item.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text("${item.mode} · ${item.files.size} 个文件 · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(item.createdAt))}",
+                        style = MaterialTheme.typography.bodySmall)
+                    item.files.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall, maxLines = 1) }
+                    Divider()
                 }
             }
         }

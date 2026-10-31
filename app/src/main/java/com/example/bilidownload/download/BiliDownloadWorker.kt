@@ -102,6 +102,10 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                 setForeground(foreground(title, message))
             }
             taskFile.delete()
+            DownloadHistoryStore(applicationContext).record(
+                inputData.getString(DownloadWork.KEY_TASK_ID).orEmpty(), title,
+                inputData.getString(DownloadWork.KEY_MODE) ?: "VIDEO", output, System.currentTimeMillis()
+            )
             Result.success(Data.Builder().putStringArray(DownloadWork.KEY_FILES, output.toTypedArray())
                 .putInt(DownloadWork.KEY_PROGRESS, 100).putString(DownloadWork.KEY_TITLE, title).build())
         } catch (e: Exception) {
