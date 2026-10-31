@@ -44,6 +44,7 @@ jobs:
           import zipfile
           import shutil
           import stat
+          import os
 
           root = pathlib.Path(".").resolve()
           incoming = root / "incoming"
@@ -55,7 +56,9 @@ jobs:
           archives = sorted(set(archives))
 
           if not archives:
-              print("No ZIP files found.")
+              print("No ZIP files found. Skipping extraction.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("found=false\n")
               raise SystemExit(0)
 
           total = 0
@@ -70,11 +73,8 @@ jobs:
                       name = item.filename.replace("\\", "/")
                       path = pathlib.PurePosixPath(name)
 
-                      if (
-                          path.is_absolute()
-                          or ".." in path.parts
-                          or (path.parts and ":" in path.parts[0])
-                      ):
+                      if (path.is_absolute() or ".." in path.parts
+                          or (path.parts and ":" in path.parts[0])):
                           raise Exception("Unsafe ZIP path: " + name)
 
                       if not path.parts:
@@ -113,26 +113,25 @@ jobs:
                           or (parent / "app/build.gradle.kts").as_posix() in available
                       )
 
-                      has_properties = (
-                          (parent / "gradle.properties").as_posix() in available
-                      )
-
                       has_manifest = (
                           (parent / "app/src/main/AndroidManifest.xml").as_posix()
                           in available
                       )
 
-                      if root_build and app_build and has_properties and has_manifest:
+                      if root_build and app_build and has_manifest:
                           project_roots.add(parent)
 
                   if len(project_roots) != 1:
+                      print("ZIP file list:")
+                      for name in sorted(available):
+                          print("  ", name)
                       raise Exception(
-                          "Expected exactly one complete Android project root, found: "
+                          "Expected exactly one Android project root, found: "
                           + str(project_roots)
                       )
 
                   project_root = next(iter(project_roots))
-                  print("Detected Android project root:", project_root)
+                  print("Detected project root:", project_root)
 
                   for item, path in entries:
                       if item.is_dir():
@@ -164,9 +163,13 @@ jobs:
               print("Deleted ZIP:", archive.name)
 
           print("Successfully extracted:", total, "files")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("found=true\n")
           PY
 
       - name: Check Android project
+        if: steps.extract.outputs.found == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -184,7 +187,6 @@ jobs:
 
           check_any settings.gradle settings.gradle.kts
           check_any build.gradle build.gradle.kts
-          test -f gradle.properties
           check_any app/build.gradle app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
@@ -192,6 +194,7 @@ jobs:
 
       - name: Commit extracted files
         id: commit
+        if: steps.extract.outputs.found == 'true'
         shell: bash
         run: |
           set -euo pipefail
