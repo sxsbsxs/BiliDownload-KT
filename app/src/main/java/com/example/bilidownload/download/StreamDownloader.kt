@@ -322,7 +322,9 @@ class StreamDownloader(private val context: Context) {
         url: String,
         displayName: String,
         cookie: String = "",
-        maxBytes: Long = 50L * 1024L * 1024L
+        maxBytes: Long = 50L * 1024L * 1024L,
+        taskId: String = "",
+        isCancelled: () -> Boolean = { false }
     ): String {
         val request = Request.Builder().url(url)
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36")
@@ -331,20 +333,38 @@ class StreamDownloader(private val context: Context) {
             .get().build()
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
         val safeName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val target = uniqueFile(folder, safeName)
+        val target = if (taskId.isBlank()) uniqueFile(folder, safeName) else File(folder, safeName)
+        val part = File(folder, target.name + ".part")
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("资源下载失败 HTTP ${response.code}")
-            val bytes = response.body?.bytes() ?: error("资源内容为空")
-            if (bytes.isEmpty() || bytes.size.toLong() > maxBytes) error("资源为空或超过大小限制")
-            target.writeBytes(bytes)
+            val body = response.body ?: error("资源内容为空")
+            if (body.contentLength() > maxBytes) error("资源超过大小限制")
+            var total = 0L
+            FileOutputStream(part, false).use { out ->
+                val input = body.byteStream()
+                val buffer = ByteArray(32 * 1024)
+                while (true) {
+                    if (isCancelled()) error("下载已取消")
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    total += count
+                    if (total > maxBytes) error("资源超过大小限制")
+                    out.write(buffer, 0, count)
+                }
+                out.fd.sync()
+            }
+            if (total <= 0L) error("资源内容为空")
         }
+        if (target.exists()) target.delete()
+        if (!part.renameTo(target)) error("无法保存资源文件")
         return exportToPublicDownloads(target)
     }
 
-    fun saveText(displayName: String, text: String): String {
+    fun saveText(displayName: String, text: String, taskId: String = ""): String {
         val folder = File(context.filesDir, "downloads").apply { mkdirs() }
         val safe = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        val file = uniqueFile(folder, safe)
+        val file = if (taskId.isBlank()) uniqueFile(folder, safe) else File(folder, safe)
         file.writeText(text, Charsets.UTF_8)
         if (!file.isFile || file.length() <= 0) error("保存文本文件失败")
         return exportToPublicDownloads(file)

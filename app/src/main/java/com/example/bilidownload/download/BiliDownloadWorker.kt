@@ -49,7 +49,8 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
             val output = mutableListOf<String>()
             var lastProgressAt = System.currentTimeMillis()
             var lastProgressBytes = 0L
-            pages.forEachIndexed { index, page ->
+            val workPages = if (mode == "COVER") pages.take(1) else pages
+            workPages.forEachIndexed { index, page ->
                 if (isStopped) return failure("任务已取消")
                 val path = when (mode) {
                     "VIDEO" -> downloader.downloadVideo(api, video, page.cid, quality, cookie, taskId,
@@ -78,21 +79,21 @@ class BiliDownloadWorker(context: Context, params: WorkerParameters) : Coroutine
                             video.coverUrl.contains(".png", true) -> "png"
                             else -> "jpg"
                         }
-                        downloader.downloadBytes(video.coverUrl, "${video.bvid}_cover.$ext", cookie)
+                        downloader.downloadBytes(video.coverUrl, "${video.bvid}_cover.$ext", cookie, taskId = taskId, isCancelled = { isStopped })
                     }
                     "DANMAKU" -> downloader.downloadBytes("https://comment.bilibili.com/${page.cid}.xml",
-                        "${video.bvid}_P${page.page}_danmaku.xml", cookie)
+                        "${video.bvid}_P${page.page}_danmaku.xml", cookie, taskId = taskId, isCancelled = { isStopped })
                     "SUBTITLE" -> {
                         val tracks = api.getSubtitleTracks(video, page.cid, cookie)
                         val track = tracks.firstOrNull { it.language == language } ?: tracks.firstOrNull()
                             ?: error("该分P没有公开字幕")
-                        downloader.saveText("${video.bvid}_P${page.page}.srt", api.downloadSubtitle(track, cookie))
+                        downloader.saveText("${video.bvid}_P${page.page}.srt", api.downloadSubtitle(track, cookie), taskId)
                     }
                     else -> error("未知下载类型：$mode")
                 }
                 output += path
-                val percent = ((index + 1) * 100 / pages.size).coerceIn(0, 100)
-                val message = "已完成 ${index + 1}/${pages.size}"
+                val percent = ((index + 1) * 100 / workPages.size).coerceIn(0, 100)
+                val message = "已完成 ${index + 1}/${workPages.size}"
                 setProgress(Data.Builder().putInt(DownloadWork.KEY_PROGRESS, percent)
                     .putString(DownloadWork.KEY_TITLE, title).putString(DownloadWork.KEY_MESSAGE, message).build())
                 setForeground(foreground(title, message))
