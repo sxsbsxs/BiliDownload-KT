@@ -324,7 +324,11 @@ private fun BiliHome(
                                     val audioId = downloader.enqueue(
                                         streams.audioUrl, info.title, "audio.m4s", cookie
                                     )
-                                    status = "视频流和音频流已加入下载队列（$videoId / $audioId）。当前版本尚未内置可靠的 DASH 合并器，请按 README 指引合并。"
+                                    status = "视频和音频正在下载，完成后会自动合并为 MP4…"
+                                    val merged = withContext(Dispatchers.IO) {
+                                        downloader.awaitAndMergeDash(videoId, audioId, info.title)
+                                    }
+                                    status = "下载并合并完成：$merged"
                                 }
                                 else -> error(
                                     "接口未返回可用视频流。请检查 Cookie、视频权限或稍后重试。"
