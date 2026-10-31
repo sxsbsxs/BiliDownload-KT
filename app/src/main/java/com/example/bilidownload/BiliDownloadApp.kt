@@ -514,8 +514,10 @@ private fun DownloadsPage(downloader: StreamDownloader) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("后台下载任务", fontWeight = FontWeight.Bold)
                 visibleTasks.forEach { work ->
-                    val title = work.progress.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
-                    val percent = work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
+                    val title = work.progress.getString(DownloadWork.KEY_TITLE)
+                        ?: work.inputData.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
+                    val percent = if (work.state == WorkInfo.State.SUCCEEDED) 100
+                        else work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
                     val message = when (work.state) {
                         WorkInfo.State.SUCCEEDED -> "已完成"
                         WorkInfo.State.FAILED -> work.outputData.getString(DownloadWork.KEY_ERROR) ?: "下载失败"
