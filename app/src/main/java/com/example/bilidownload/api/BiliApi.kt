@@ -117,7 +117,11 @@ class BiliApi {
             .header("User-Agent", USER_AGENT)
             .header("Referer", "https://www.bilibili.com/")
             .header("Origin", "https://www.bilibili.com")
-            .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
+            .apply {
+                val normalizedCookie = normalizeCookie(cookie)
+                if (normalizedCookie.isNotBlank()) header("Cookie", normalizedCookie)
+            }
+            .header("Accept", "application/json, text/plain, */*")
             .get()
             .build()
         client.newCall(request).execute().use { response ->
@@ -131,8 +135,23 @@ class BiliApi {
         val code = json.optInt("code", -1)
         if (code != 0) {
             val message = json.optString("message", json.optString("msg", "Bilibili API error"))
-            error("B站接口错误 ($code)：$message")
+            when (code) {
+                -101 -> error("B站账号未登录或 Cookie 已失效（-101）。请重新复制完整 Cookie，至少包含 SESSDATA；不要填写账号密码。")
+                -111 -> error("B站登录凭据校验失败（-111）。请重新获取 Cookie 后再试。")
+                -352 -> error("B站触发风控（-352）。请先在浏览器正常打开 B站并完成验证，稍后再试。")
+                else -> error("B站接口错误 ($code)：$message")
+            }
         }
+    }
+
+    private fun normalizeCookie(raw: String): String {
+        return raw.trim()
+            .removePrefix("Cookie:")
+            .removePrefix("cookie:")
+            .replace("\\r", "")
+            .replace("\\n", "")
+            .trim()
+            .removeSurrounding("\\\"")
     }
 
     private fun extractBvid(input: String): String {
