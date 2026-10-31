@@ -545,7 +545,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
         var workInfos by remember { mutableStateOf(emptyList<WorkInfo>()) }
         var taskQuery by remember { mutableStateOf("") }
         var selectedTaskIds by remember { mutableStateOf(setOf<String>()) }
-        var history by remember { mutableStateOf(emptyList<DownloadHistoryStore.HistoryItem>()) }
+        var history by remember { mutableStateOf(emptyList<DownloadHistoryEntry>()) }
         LaunchedEffect(Unit) {
             val manager = WorkManager.getInstance(context)
             manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { updated ->
