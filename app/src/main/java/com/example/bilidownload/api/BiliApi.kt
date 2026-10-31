@@ -20,8 +20,8 @@ class BiliApi {
         .build()
 
     fun getVideoInfo(input: String, cookie: String): VideoInfo {
-        val bvid = extractBvid(input)
-        val json = getJson("https://api.bilibili.com/x/web-interface/view?bvid=$bvid", cookie)
+        val videoId = extractVideoId(input)
+        val json = getJson("https://api.bilibili.com/x/web-interface/view?$videoId", cookie)
         ensureSuccess(json)
         val data = json.getJSONObject("data")
         val pagesJson = data.optJSONArray("pages")
@@ -154,10 +154,14 @@ class BiliApi {
             .removeSurrounding("\"")
     }
 
-    private fun extractBvid(input: String): String {
-        val match = Regex("BV[0-9A-Za-z]{10}").find(input.trim())
-            ?: error("没有识别到 BV 号，请输入完整 B站视频链接或 BV 号")
-        return match.value
+    private fun extractVideoId(input: String): String {
+        val value = input.trim()
+        val bvid = Regex("(?i)BV[0-9A-Za-z]{10}").find(value)?.value
+        if (bvid != null) return "bvid=$bvid"
+        val aid = Regex("(?i)(?:^|[/?:=&])av(\d+)").find(value)?.groupValues?.get(1)
+            ?: Regex("(?i)^\\s*(\\d+)\\s*$").matchEntire(value)?.groupValues?.get(1)
+        if (!aid.isNullOrBlank() && aid.toLongOrNull() != null) return "aid=$aid"
+        error("未识别到视频编号，请输入 BV 号、av号或完整 B站视频链接")
     }
 
     private fun getMixinKey(orig: String): String {
