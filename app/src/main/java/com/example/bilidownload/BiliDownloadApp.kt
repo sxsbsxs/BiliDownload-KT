@@ -137,7 +137,7 @@ fun BiliDownloadApp(api: BiliApi, downloader: StreamDownloader, vault: CookieVau
                     }
                 }
                 when (tab) {
-                    AppTab.HOME -> HomePage(api, downloader, cookie, homeInput, { homeInput = it }, { globalMessage = it }, { tab = AppTab.DOWNLOADS })
+                    AppTab.HOME -> HomePage(api, downloader, cookie, homeInput, { homeInput = it }, { globalMessage = it }, { tab = AppTab.DOWNLOADS }, { tab = AppTab.PROFILE })
                     AppTab.DOWNLOADS -> DownloadsPage(downloader)
                     AppTab.SYNC -> SyncPage(api, cookie, { video ->
                         homeInput = video.bvid.ifBlank { "av${video.aid}" }
@@ -168,7 +168,8 @@ private fun HomePage(
     input: String,
     onInput: (String) -> Unit,
     onMessage: (String) -> Unit,
-    onOpenDownloads: () -> Unit
+    onOpenDownloads: () -> Unit,
+    onOpenProfile: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<VideoInfo?>(null) }
@@ -303,7 +304,7 @@ private fun HomePage(
                 Text("bilibilidl", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("BILIBILI VIDEO TOOL / KOTLIN", style = MaterialTheme.typography.labelSmall)
             }
-            TextButton(onClick = onOpenDownloads) { Text("已下载 →") }
+            TextButton(onClick = onOpenProfile) { Text("B站登录 ↗") }
         }
         Card {
             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
