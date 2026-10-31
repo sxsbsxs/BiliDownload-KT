@@ -3,6 +3,7 @@ package com.example.bilidownload.download
 import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaMuxer
 import android.media.MediaFormat
@@ -52,7 +53,7 @@ class StreamDownloader(private val context: Context) {
             )
         val normalizedCookie = cookie.trim()
             .removePrefix("Cookie:").removePrefix("cookie:")
-            .replace("\\r", "").replace("\\n", "").trim()
+            .replace("\r", "").replace("\n", "").trim()
         if (normalizedCookie.isNotBlank()) request.addRequestHeader("Cookie", normalizedCookie)
         request.setDestinationInExternalPublicDir(
             Environment.DIRECTORY_DOWNLOADS,
@@ -78,8 +79,7 @@ class StreamDownloader(private val context: Context) {
      */
     fun awaitAndMergeDash(videoId: Long, audioId: Long, title: String): String {
         val deadline = System.currentTimeMillis() + 45L * 60L * 1000L
-        val videoUri: Uri
-        val audioUri: Uri
+        var completedUris: Pair<Uri, Uri>? = null
         while (true) {
             val video = downloadState(videoId)
             val audio = downloadState(audioId)
@@ -90,14 +90,16 @@ class StreamDownloader(private val context: Context) {
                 error("音频流下载失败，DownloadManager 原因码：${audio.second}")
             }
             if (video.first == DownloadManager.STATUS_SUCCESSFUL && audio.first == DownloadManager.STATUS_SUCCESSFUL) {
-                videoUri = video.third ?: error("未取得视频流文件")
-                audioUri = audio.third ?: error("未取得音频流文件")
+                val videoUri = video.third ?: error("未取得视频流文件")
+                val audioUri = audio.third ?: error("未取得音频流文件")
+                completedUris = videoUri to audioUri
                 break
             }
             if (System.currentTimeMillis() > deadline) error("等待视频/音频流下载超时")
             Thread.sleep(1000)
         }
 
+        val (videoUri, audioUri) = completedUris ?: error("下载任务未完成")
         val safeTitle = title.replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .replace(Regex("\\s+"), " ").take(72).ifBlank { "bilibili_video" }
         val temp = File(context.cacheDir, "bili_${System.currentTimeMillis()}.mp4")
@@ -152,8 +154,8 @@ class StreamDownloader(private val context: Context) {
     }
 
     private fun writeExtractorSamples(extractor: MediaExtractor, muxer: MediaMuxer, trackIndex: Int) {
-        val buffer = ByteBuffer.allocate(1024 * 1024)
-        val info = MediaMuxer.BufferInfo()
+        val buffer = ByteBuffer.allocate(8 * 1024 * 1024)
+        val info = MediaCodec.BufferInfo()
         while (true) {
             buffer.clear()
             val size = extractor.readSampleData(buffer, 0)
