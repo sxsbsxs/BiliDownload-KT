@@ -514,8 +514,8 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                 delay(1500)
             }
         }
-        val visibleTasks = workInfos.sortedByDescending { it.inputData.getLong(DownloadWork.KEY_CREATED_AT, 0L) }
-            .filter { (it.progress.getString(DownloadWork.KEY_TITLE) ?: it.inputData.getString(DownloadWork.KEY_TITLE) ?: "").contains(taskQuery, true) }
+        val visibleTasks = workInfos.sortedByDescending { work -> DownloadWork.inputFor(context, work.tags).getLong(DownloadWork.KEY_CREATED_AT, 0L) }
+            .filter { work -> (work.progress.getString(DownloadWork.KEY_TITLE) ?: DownloadWork.inputFor(context, work.tags).getString(DownloadWork.KEY_TITLE) ?: "").contains(taskQuery, true) }
             .take(50)
         if (workInfos.isNotEmpty()) Card {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -531,13 +531,14 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                     }) { Text("批量暂停") }
                     TextButton(onClick = {
                         visibleTasks.filter { it.id.toString() in selectedTaskIds && (it.state == WorkInfo.State.CANCELLED || it.state == WorkInfo.State.FAILED) }
-                            .forEach { DownloadWork.resume(context, it.inputData) }
+                            .forEach { DownloadWork.resume(context, DownloadWork.inputFor(context, it.tags)) }
                         selectedTaskIds = emptySet()
                     }) { Text("批量继续") }
                 }
                 visibleTasks.forEach { work ->
+                    val taskInput = DownloadWork.inputFor(context, work.tags)
                     val title = work.progress.getString(DownloadWork.KEY_TITLE)
-                        ?: work.inputData.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
+                        ?: taskInput.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
                     val percent = if (work.state == WorkInfo.State.SUCCEEDED) 100 else work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
                     val message = when (work.state) {
                         WorkInfo.State.SUCCEEDED -> "已完成"
@@ -563,8 +564,8 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                         when (work.state) {
                             WorkInfo.State.RUNNING -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("暂停") }
                             WorkInfo.State.ENQUEUED -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("移除") }
-                            WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, work.inputData) }) { Text("继续") }
-                            WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
+                            WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, taskInput) }) { Text("继续") }
+                            WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, taskInput) }) { Text("重试") }
                             else -> Unit
                         }
                     }

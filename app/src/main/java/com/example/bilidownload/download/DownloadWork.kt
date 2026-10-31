@@ -11,6 +11,7 @@ import java.util.UUID
 import java.io.File
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import androidx.work.Data
 import com.example.bilidownload.model.VideoInfo
 import com.example.bilidownload.model.VideoPage
 import org.json.JSONArray
@@ -43,13 +44,30 @@ object DownloadWork {
         val taskId = UUID.randomUUID().toString()
         val taskFolder = File(context.filesDir, "download_tasks").apply { mkdirs() }
         File(taskFolder, "$taskId.json").writeText(payload)
+        val createdAt = System.currentTimeMillis()
+        val input = workDataOf(KEY_TITLE to video.title, KEY_MODE to mode,
+            KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId, KEY_CREATED_AT to createdAt)
+        File(taskFolder, "$taskId.meta.json").writeText(JSONObject().put(KEY_TITLE, video.title)
+            .put(KEY_MODE, mode).put(KEY_LANGUAGE, subtitleLanguage).put(KEY_QUALITY, quality)
+            .put(KEY_TASK_ID, taskId).put(KEY_CREATED_AT, createdAt).toString())
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
-            .setInputData(workDataOf(KEY_TITLE to video.title, KEY_MODE to mode,
-                KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId, KEY_CREATED_AT to System.currentTimeMillis()))
+            .setInputData(input)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
-            .addTag(TAG).build()
+            .addTag(TAG).addTag("bili-task-$taskId").build()
         WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${taskId}", ExistingWorkPolicy.KEEP, request)
+    }
+
+
+    fun inputFor(context: Context, tags: Set<String>): Data {
+        val taskId = tags.firstOrNull { it.startsWith("bili-task-") }?.removePrefix("bili-task-")
+            ?: return Data.Builder().build()
+        val file = File(context.filesDir, "download_tasks/$taskId.meta.json")
+        if (!file.isFile) return Data.Builder().putString(KEY_TASK_ID, taskId).build()
+        val json = JSONObject(file.readText())
+        return workDataOf(KEY_TITLE to json.optString(KEY_TITLE), KEY_MODE to json.optString(KEY_MODE, "VIDEO"),
+            KEY_LANGUAGE to json.optString(KEY_LANGUAGE), KEY_QUALITY to json.optInt(KEY_QUALITY, 80),
+            KEY_TASK_ID to taskId, KEY_CREATED_AT to json.optLong(KEY_CREATED_AT, 0L))
     }
 
     fun resume(context: Context, input: androidx.work.Data) {
