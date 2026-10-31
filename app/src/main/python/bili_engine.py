@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse
 
 _BVID = re.compile(r"BV[0-9A-Za-z]{10}", re.IGNORECASE)
-_AVID = re.compile(r"(?:^|[/?:=&])av\s*(\d+)", re.IGNORECASE)
+_AVID = re.compile(r"av(\d+)", re.IGNORECASE)
 
 
 def normalize_video_input(value: str) -> str:
@@ -20,14 +20,12 @@ def normalize_video_input(value: str) -> str:
     if not original:
         return original
 
-    match = _BVID.search(original)
-    if match:
-        return match.group(0)
-
-    match = _AVID.search(original)
+    # Bare IDs are accepted directly.
+    if _BVID.fullmatch(original):
+        return original
+    match = _AVID.fullmatch(original)
     if match:
         return "av" + match.group(1)
-
     if original.isdigit():
         return "av" + original
 
@@ -49,11 +47,9 @@ def normalize_video_input(value: str) -> str:
     match = _BVID.search(parsed.path)
     if match:
         return match.group(0)
-
     match = re.search(r"/video/av(\d+)", parsed.path, re.IGNORECASE)
     if match:
         return "av" + match.group(1)
-
     return original
 
 

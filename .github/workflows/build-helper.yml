@@ -24,8 +24,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Run Python unit tests
-        run: |
-          python -m unittest discover -s app/src/test/python -p "test_*.py" -v
+        env:
+          PYTHONPATH: app/src/main/python
+        run: python -m unittest discover -s app/src/test/python -p "test_*.py" -v
 
   android:
     name: Build Android APK
@@ -42,8 +43,7 @@ jobs:
           cmdline-tools-version: "latest"
           accept-android-sdk-licenses: true
       - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Validate Gradle wrapper
         run: |
           test -f gradlew
