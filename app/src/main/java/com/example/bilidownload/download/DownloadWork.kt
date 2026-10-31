@@ -7,6 +7,7 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.BackoffPolicy
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.bilidownload.model.VideoInfo
@@ -28,6 +29,8 @@ object DownloadWork {
     const val KEY_FILES = "files"
     const val KEY_SPEED = "speed"
     const val KEY_ETA = "eta"
+    const val KEY_TASK_ID = "task_id"
+    const val QUEUE_NAME = "bili-download-serial-queue"
 
     fun enqueue(context: Context, video: VideoInfo, pages: List<VideoPage>, quality: Int, mode: String, subtitleLanguage: String) {
         require(pages.isNotEmpty()) { "没有可下载的分P" }
@@ -36,21 +39,28 @@ object DownloadWork {
         val payload = JSONObject().put("bvid", video.bvid).put("aid", video.aid).put("cid", video.cid)
             .put("owner", video.owner).put("duration", video.durationSeconds).put("cover", video.coverUrl)
             .put("pages", pageArray).toString()
+        val taskId = UUID.randomUUID().toString()
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
             .setInputData(workDataOf(KEY_TITLE to video.title, KEY_VIDEO to payload, KEY_MODE to mode,
-                KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality))
+                KEY_LANGUAGE to subtitleLanguage, KEY_QUALITY to quality, KEY_TASK_ID to taskId))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()
-        WorkManager.getInstance(context).enqueueUniqueWork("bili-download-${request.id}", ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(context).beginUniqueWork(QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request).enqueue()
     }
 
-    fun retry(context: Context, input: androidx.work.Data) {
+    fun resume(context: Context, input: androidx.work.Data) {
         val request = OneTimeWorkRequestBuilder<BiliDownloadWorker>()
             .setInputData(input)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 20, TimeUnit.SECONDS)
             .addTag(TAG).build()
-        WorkManager.getInstance(context).enqueue(request)
+        WorkManager.getInstance(context).beginUniqueWork(QUEUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request).enqueue()
+    }
+
+    fun retry(context: Context, input: androidx.work.Data) = resume(context, input)
+
+    fun pause(context: Context, id: UUID) {
+        WorkManager.getInstance(context).cancelWorkById(id)
     }
 }
