@@ -207,6 +207,8 @@ private fun HomePage(
                 info = normalized
                 selectedPage = 0
                 allPages = false
+                subtitleTracks = emptyList()
+                selectedSubtitleLanguage = ''
                 try {
                     val streams = withContext(Dispatchers.IO) { api.getPlayStreams(normalized, pages.first().cid, 127, cookie) }
                     qualities = streams.acceptedQualities
@@ -236,6 +238,15 @@ private fun HomePage(
                 }
                 qualities = streams.acceptedQualities
                 quality = qualities.firstOrNull()?.quality ?: 80
+                if (mode == SaveMode.SUBTITLE) {
+                    runCatching { api.getSubtitleTracks(current, page.cid, cookie) }
+                        .onSuccess { tracks ->
+                            subtitleTracks = tracks
+                            if (tracks.none { it.language == selectedSubtitleLanguage }) {
+                                selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
+                            }
+                        }
+                }
                 status = "已切换到 P${page.page}，已更新该分P实际可用画质。"
             } catch (e: Exception) {
                 qualities = emptyList()
