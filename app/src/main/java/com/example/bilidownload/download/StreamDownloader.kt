@@ -303,7 +303,7 @@ class StreamDownloader(private val context: Context) {
             error("所有下载地址均失败：${failures.joinToString("；")}")
         }
         if (!streams.progressiveUrl.isNullOrBlank()) {
-            download(listOf(streams.progressiveUrl), output)
+            download(listOf(streams.progressiveUrl) + streams.progressiveBackups, output)
         } else {
             val videoUrl = streams.videoUrl ?: error("B站未返回视频轨道")
             val audioUrl = streams.audioUrl ?: error("B站未返回音频轨道")
