@@ -218,6 +218,27 @@ private fun HomePage(
         }
     }
 
+    fun selectPart(index: Int) {
+        selectedPage = index
+        allPages = false
+        val current = info ?: return
+        val page = current.pages.getOrNull(index) ?: return
+        scope.launch {
+            try {
+                val streams = withContext(Dispatchers.IO) {
+                    api.getPlayStreams(current, page.cid, 127, cookie)
+                }
+                qualities = streams.acceptedQualities
+                quality = qualities.firstOrNull()?.quality ?: 80
+                status = "已切换到 P${page.page}，已更新该分P实际可用画质。"
+            } catch (e: Exception) {
+                qualities = emptyList()
+                quality = 80
+                status = "已切换到 P${page.page}，画质列表暂不可用；仍可尝试下载。"
+            }
+        }
+    }
+
     fun startDownload() {
         val video = info ?: return
         if (busy) return
@@ -372,10 +393,10 @@ private fun HomePage(
                     }
                     video.pages.forEachIndexed { index, page ->
                         Row(
-                            Modifier.fillMaxWidth().clickable { selectedPage = index; allPages = false }.padding(vertical = 4.dp),
+                            Modifier.fillMaxWidth().clickable { selectPart(index) }.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            RadioButton(selected = selectedPage == index && !allPages, onClick = { selectedPage = index; allPages = false })
+                            RadioButton(selected = selectedPage == index && !allPages, onClick = { selectPart(index) })
                             Text("P${page.page} · ${page.part}", modifier = Modifier.weight(1f))
                             Text(formatDuration(page.durationSeconds), style = MaterialTheme.typography.labelSmall)
                         }
@@ -411,17 +432,27 @@ private fun VideoActions(api: BiliApi, video: VideoInfo, cookie: String, onMessa
                     scope.launch { onMessage(runCatching { withContext(Dispatchers.IO) { api.coinVideo(video, cookie) }; "投币成功" }.getOrElse { it.message ?: "投币失败" }) }
                 }, enabled = cookie.isNotBlank(), modifier = Modifier.weight(1f)) { Text("投币") }
             }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    onMessage(runCatching {
-                        withContext(Dispatchers.IO) {
-                            val folder = api.getFavoriteFolders(cookie).firstOrNull() ?: error("没有可用收藏夹")
-                            api.favoriteVideo(video, folder.id, cookie)
-                        }
-                        "已加入默认收藏夹"
-                    }.getOrElse { it.message ?: "收藏失败" })
-                }
-            }, enabled = cookie.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("收藏到默认收藏夹") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        onMessage(runCatching {
+                            withContext(Dispatchers.IO) { api.followUser(video.ownerMid, cookie) }
+                            "已关注 UP 主"
+                        }.getOrElse { it.message ?: "关注失败" })
+                    }
+                }, enabled = cookie.isNotBlank() && video.ownerMid > 0, modifier = Modifier.weight(1f)) { Text("关注 UP 主") }
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        onMessage(runCatching {
+                            withContext(Dispatchers.IO) {
+                                val folder = api.getFavoriteFolders(cookie).firstOrNull() ?: error("没有可用收藏夹")
+                                api.favoriteVideo(video, folder.id, cookie)
+                            }
+                            "已加入默认收藏夹"
+                        }.getOrElse { it.message ?: "收藏失败" })
+                    }
+                }, enabled = cookie.isNotBlank(), modifier = Modifier.weight(1f)) { Text("收藏") }
+            }
         }
     }
 }
