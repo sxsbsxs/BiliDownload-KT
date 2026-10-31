@@ -225,6 +225,7 @@ class StreamDownloader(private val context: Context) {
         val http = OkHttpClient.Builder().connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).followRedirects(true).build()
         fun download(urls: List<String>, target: File) {
+            if (target.isFile && target.length() > 0L) return
             val failures = mutableListOf<String>()
             for (url in urls.filter { it.startsWith("https://") || it.startsWith("http://") }.distinct()) {
                 if (isCancelled()) error("下载已取消")
