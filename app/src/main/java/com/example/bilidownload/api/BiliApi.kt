@@ -284,7 +284,7 @@ class BiliApi {
         if (getNav(cookie) == null) error("同步观看历史需要登录")
         val output = LinkedHashMap<String, VideoInfo>()
         var max = 0L; var viewAt = 0L
-        repeat(maxPages.coerceIn(1, 20)) {
+        for (pageIndex in 0 until maxPages.coerceIn(1, 20)) {
             val d = getData("$API/x/web-interface/history/cursor?max=$max&view_at=$viewAt&business=archive&ps=30", cookie)
             val rows = d.optJSONArray("list") ?: JSONArray()
             for (i in 0 until rows.length()) {
