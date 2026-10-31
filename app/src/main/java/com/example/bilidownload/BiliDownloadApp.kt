@@ -22,6 +22,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.getWorkInfosByTagFlow
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
@@ -178,6 +185,7 @@ private fun HomePage(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var info by remember { mutableStateOf<VideoInfo?>(null) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var selectedPage by remember { mutableIntStateOf(0) }
     var allPages by remember { mutableStateOf(false) }
     var qualities by remember { mutableStateOf(emptyList<StreamChoice>()) }
@@ -285,6 +293,9 @@ private fun HomePage(
         val pages = if (allPages) video.pages else listOfNotNull(currentPage)
         if (pages.isEmpty()) { status = "请先选择有效分P"; return }
         runCatching {
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
             DownloadWork.enqueue(context, video, pages, chosenQuality?.quality ?: quality, mode.name, selectedSubtitleLanguage)
         }.onSuccess {
             status = "下载任务已加入后台队列。离开页面后仍会继续，可在“已下载”查看任务。"
@@ -495,8 +506,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
         LaunchedEffect(Unit) {
             val manager = WorkManager.getInstance(context)
             while (true) {
-                workInfos = runCatching { manager.getWorkInfosByTag(DownloadWork.TAG).get() }.getOrDefault(emptyList())
-                delay(1000)
+                manager.getWorkInfosByTagFlow(DownloadWork.TAG).collect { workInfos = it }
             }
         }
         val visibleTasks = workInfos.take(20)
@@ -509,7 +519,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                     val message = when (work.state) {
                         WorkInfo.State.SUCCEEDED -> "已完成"
                         WorkInfo.State.FAILED -> work.outputData.getString(DownloadWork.KEY_ERROR) ?: "下载失败"
-                        WorkInfo.State.CANCELLED -> "已取消"
+                        WorkInfo.State.CANCELLED -> "已暂停 / 已取消（可继续）"
                         WorkInfo.State.ENQUEUED -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "排队中 / 等待网络"
                         else -> work.progress.getString(DownloadWork.KEY_MESSAGE) ?: "正在处理"
                     }
@@ -522,11 +532,11 @@ private fun DownloadsPage(downloader: StreamDownloader) {
                             "$message · $percent% · ${formatRate(speed)}" + if (eta >= 0L) " · 剩余约 ${eta}秒" else ""
                         else "$message · $percent%"
                         Text(detail, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        if (work.state == WorkInfo.State.FAILED) {
-                            TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
-                        } else {
-                            TextButton(onClick = { WorkManager.getInstance(context).cancelWorkById(work.id) },
-                                enabled = work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) { Text("取消") }
+                        when (work.state) {
+                            WorkInfo.State.RUNNING -> TextButton(onClick = { DownloadWork.pause(context, work.id) }) { Text("暂停") }
+                            WorkInfo.State.CANCELLED -> TextButton(onClick = { DownloadWork.resume(context, work.inputData) }) { Text("继续") }
+                            WorkInfo.State.FAILED -> TextButton(onClick = { DownloadWork.retry(context, work.inputData) }) { Text("重试") }
+                            else -> Unit
                         }
                     }
                 }
