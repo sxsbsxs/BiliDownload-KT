@@ -41,6 +41,7 @@ import com.example.bilidownload.api.BiliLoginManager
 import com.example.bilidownload.download.StreamDownloader
 import com.example.bilidownload.download.DownloadWork
 import com.example.bilidownload.download.DownloadHistoryStore
+import com.example.bilidownload.download.DownloadHistoryEntry
 import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
@@ -270,7 +271,23 @@ private fun HomePage(
         val page = current.pages.getOrNull(index) ?: return
         qualities = emptyList()
         quality = 80
-        if (mode == SaveMode.SUBTITLE) loadSubtitleTracks()
+        if (mode == SaveMode.SUBTITLE) {
+            subtitleLoading = true
+            scope.launch {
+                try {
+                    val tracks = withContext(Dispatchers.IO) { api.getSubtitleTracks(current, page.cid, cookie) }
+                    subtitleTracks = tracks
+                    if (tracks.none { it.language == selectedSubtitleLanguage }) {
+                        selectedSubtitleLanguage = tracks.firstOrNull()?.language.orEmpty()
+                    }
+                } catch (e: Exception) {
+                    subtitleTracks = emptyList()
+                    status = "读取字幕列表失败：${e.message ?: "接口暂不可用"}"
+                } finally {
+                    subtitleLoading = false
+                }
+            }
+        }
         status = "已切换到 P${page.page}。需要选择画质时再读取该分P的画质列表。"
     }
 
