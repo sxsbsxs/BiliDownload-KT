@@ -227,7 +227,9 @@ class BiliApi {
         val chosen = videoCandidates.filter { it.optInt("id") <= qn }.maxByOrNull { it.optInt("id") }
             ?: videoCandidates.minByOrNull { kotlin.math.abs(it.optInt("id") - qn) }
         val audio = audioCandidates.maxByOrNull { it.optLong("bandwidth") }
-        val progressive = durl?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+        val progressiveObject = durl?.optJSONObject(0)
+        val progressive = progressiveObject?.optString("url")?.takeIf { it.isNotBlank() }
+        val progressiveBackups = progressiveObject?.optJSONArray("backup_url").toStringList()
         return PlayStreams(
             videoUrl = chosen?.optString("baseUrl")?.takeIf { it.isNotBlank() }
                 ?: chosen?.optString("base_url")?.takeIf { it.isNotBlank() }
@@ -239,6 +241,7 @@ class BiliApi {
             acceptedQualities = accepted.entries.sortedByDescending { it.key }.map { StreamChoice(it.key, it.value) },
             videoBackups = chosen?.optJSONArray("backupUrl").toStringList(),
             audioBackups = audio?.optJSONArray("backupUrl").toStringList(),
+            progressiveBackups = progressiveBackups,
             format = if (progressive != null) "durl" else "dash"
         )
     }
