@@ -178,6 +178,18 @@ private fun BiliHome(
                                                 loginMessage = "登录成功，登录状态已加密保存在本机。"
                                                 qrKey = ""
                                                 status = "B站扫码登录成功，可以开始获取画质并下载。"
+                                                video?.let { currentVideo ->
+                                                    try {
+                                                        qualityChoices = withContext(Dispatchers.IO) {
+                                                            api.getPlayStreams(currentVideo, selectedCid, 127, state.cookie).acceptedQualities
+                                                        }
+                                                        quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
+                                                        status = if (qualityChoices.isNotEmpty()) "登录成功，已刷新当前视频可用画质，可以下载了。" else "登录成功，但该视频暂未返回可用画质。"
+                                                    } catch (e: Exception) {
+                                                        qualityChoices = emptyList()
+                                                        status = "登录成功，但读取画质失败：${e.message ?: "请重新解析视频"}"
+                                                    }
+                                                }
                                             }
                                             86101 -> loginMessage = "等待扫码，请用 B 站 App 扫描二维码。"
                                             86090 -> loginMessage = "已扫码，请在手机上确认登录。"
