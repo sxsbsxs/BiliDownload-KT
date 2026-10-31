@@ -26,6 +26,7 @@ import coil.compose.AsyncImage
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
 import com.example.bilidownload.download.StreamDownloader
+import com.example.bilidownload.download.DownloadWork
 import com.example.bilidownload.engine.PythonBridge
 import com.example.bilidownload.model.*
 import com.example.bilidownload.security.CookieVault
