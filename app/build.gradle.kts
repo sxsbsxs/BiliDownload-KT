@@ -15,12 +15,11 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "2.0.0"
-    }
 
-    // Chaquopy supplies native Python runtimes for supported Android ABIs.
-    // Keep the APK universal for the common ARM and x86_64 emulator targets.
-    ndk {
-        abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        // Chaquopy supplies native Python runtimes for these Android ABIs.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
