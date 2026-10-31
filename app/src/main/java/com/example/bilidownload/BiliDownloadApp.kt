@@ -509,7 +509,7 @@ private fun DownloadsPage(downloader: StreamDownloader) {
         LaunchedEffect(Unit) {
             val manager = WorkManager.getInstance(context)
             while (true) {
-                workInfos = withContext(Dispatchers.IO) { manager.getWorkInfosByTag(DownloadWork.TAG) }
+                workInfos = withContext(Dispatchers.IO) { manager.getWorkInfosByTag(DownloadWork.TAG).get() }
                 history = withContext(Dispatchers.IO) { DownloadHistoryStore(context).list() }
                 delay(1500)
             }
