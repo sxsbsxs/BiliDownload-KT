@@ -224,11 +224,33 @@ jobs:
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes to commit."
-          else
-            git commit -m "Auto extract BiliDownload-KT project"
-            git push origin "HEAD:${TARGET_BRANCH}"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          git commit -m "Auto extract BiliDownload-KT project"
+
+          for attempt in 1 2 3; do
+            echo "Push attempt $attempt"
+
+            git fetch origin "$TARGET_BRANCH"
+
+            if ! git rebase "origin/$TARGET_BRANCH"; then
+              git rebase --abort || true
+              echo "Rebase conflict. Remote files were preserved."
+              exit 1
+            fi
+
+            if git push origin "HEAD:${TARGET_BRANCH}"; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "Push successful."
+              exit 0
+            fi
+
+            echo "Push rejected. Retrying with latest remote branch."
+          done
+
+          echo "Push failed after 3 attempts."
+          exit 1
 
       - name: Trigger APK build
         if: steps.commit.outputs.changed == 'true'
