@@ -1,14 +1,9 @@
 package com.example.bilidownload
 
 import android.os.Build
-import android.graphics.Bitmap
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
-import androidx.compose.foundation.Image
-import androidx.compose.ui.graphics.asImageBitmap
-import kotlinx.coroutines.delay
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -33,10 +28,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.size
 import coil.ImageLoader
@@ -96,11 +89,6 @@ private fun BiliHome(
     var selectedCid by remember { mutableLongStateOf(0L) }
     var quality by remember { mutableIntStateOf(80) }
     var qualityChoices by remember { mutableStateOf(emptyList<com.example.bilidownload.model.StreamChoice>()) }
-    var showLogin by remember { mutableStateOf(false) }
-    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var qrKey by remember { mutableStateOf("") }
-    var loginMessage by remember { mutableStateOf("点击获取 B 站官方扫码二维码。") }
-    var loginBusy by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("粘贴 B站视频链接或 BV 号开始解析。") }
     val scope = rememberCoroutineScope()
@@ -115,96 +103,23 @@ private fun BiliHome(
         Text("BiliDownload KT", style = MaterialTheme.typography.headlineMedium)
         Text("Kotlin · Jetpack Compose · B站视频与封面下载")
 
-        OutlinedButton(onClick = { showLogin = !showLogin }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (showLogin) "返回下载页面" else "哔哩哔哩扫码登录")
-        }
-
-
-        if (showLogin) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("扫码登录", style = MaterialTheme.typography.titleLarge)
-                    Text("哔哩哔哩", style = MaterialTheme.typography.headlineSmall)
-                    if (qrBitmap != null) {
-                        Image(
-                            bitmap = qrBitmap!!.asImageBitmap(),
-                            contentDescription = "哔哩哔哩登录二维码",
-                            modifier = Modifier.size(240.dp),
-                            contentScale = ContentScale.Fit
-                        )
+        OutlinedButton(
+            onClick = {
+                try {
+                    val launchIntent = context.packageManager.getLaunchIntentForPackage("tv.danmaku.bili")
+                    if (launchIntent != null) {
+                        context.startActivity(launchIntent)
+                        status = "已打开哔哩哔哩 App。请在 B 站内登录；普通第三方下载器无法直接读取 B 站 App 的登录 Cookie。"
                     } else {
-                        Text("使用哔哩哔哩手机 App 扫码登录。")
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.bilibili.com/")))
+                        status = "未检测到哔哩哔哩 App，已尝试打开 B 站网页。"
                     }
-                    Text(loginMessage, style = MaterialTheme.typography.bodyMedium)
-                    Button(
-                        enabled = !loginBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            loginBusy = true
-                            qrBitmap = null
-                            qrKey = ""
-                            loginMessage = "正在申请二维码…"
-                            scope.launch {
-                                try {
-                                    val pair = withContext(Dispatchers.IO) { api.generateQrLogin() }
-                                    qrKey = pair.second
-                                    val matrix = QRCodeWriter().encode(pair.first, BarcodeFormat.QR_CODE, 640, 640)
-                                    val bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888)
-                                    for (y in 0 until 640) for (x in 0 until 640) {
-                                        bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-                                    }
-                                    qrBitmap = bitmap
-                                    loginMessage = "请扫码，并在手机 B 站 App 上确认登录。"
-                                    while (qrKey.isNotBlank()) {
-                                        delay(2000)
-                                        val state = withContext(Dispatchers.IO) { api.pollQrLogin(qrKey) }
-                                        when (state.code) {
-                                            0 -> {
-                                                cookie = state.cookie
-                                                onSaveCookie(state.cookie)
-                                                loginMessage = "登录成功，登录状态已加密保存在本机。"
-                                                qrKey = ""
-                                                status = "B站扫码登录成功，可以开始获取画质并下载。"
-                                                video?.let { currentVideo ->
-                                                    try {
-                                                        qualityChoices = withContext(Dispatchers.IO) {
-                                                            api.getPlayStreams(currentVideo, selectedCid, 127, state.cookie).acceptedQualities
-                                                        }
-                                                        quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
-                                                        status = if (qualityChoices.isNotEmpty()) "登录成功，已刷新当前视频可用画质，可以下载了。" else "登录成功，但该视频暂未返回可用画质。"
-                                                    } catch (e: Exception) {
-                                                        qualityChoices = emptyList()
-                                                        status = "登录成功，但读取画质失败：${e.message ?: "请重新解析视频"}"
-                                                    }
-                                                }
-                                            }
-                                            86101 -> loginMessage = "等待扫码，请用 B 站 App 扫描二维码。"
-                                            86090 -> loginMessage = "已扫码，请在手机上确认登录。"
-                                            86038 -> {
-                                                loginMessage = "二维码已过期，请重新获取。"
-                                                qrKey = ""
-                                            }
-                                            else -> loginMessage = state.message.ifBlank { "正在等待扫码确认…" }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    loginMessage = e.message ?: "获取二维码失败，请稍后重试。"
-                                } finally {
-                                    loginBusy = false
-                                }
-                            }
-                        }
-                    ) { Text(if (qrBitmap == null) "获取登录二维码" else "刷新二维码") }
-                    OutlinedButton(onClick = { showLogin = false }, modifier = Modifier.fillMaxWidth()) {
-                        Text("返回下载页面")
-                    }
+                } catch (e: Exception) {
+                    status = "无法打开哔哩哔哩 App：${e.message ?: "请检查是否已安装"}"
                 }
-            }
-        }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("打开哔哩哔哩 App") }
 
         OutlinedTextField(
             value = input,
@@ -217,10 +132,9 @@ private fun BiliHome(
         OutlinedTextField(
             value = cookie,
             onValueChange = { cookie = it },
-            label = { Text("B站 Cookie（扫码登录后自动填写）") },
-            placeholder = { Text("请先使用上方扫码登录") },
+            label = { Text("B站 Cookie（可选，提升账号可用画质）") },
+            placeholder = { Text("游客可留空；需要账号权限时可粘贴 Cookie") },
             modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
             minLines = 2,
             maxLines = 4
         )
@@ -243,15 +157,11 @@ private fun BiliHome(
                             }
                             video = parsed
                             selectedCid = parsed.pages.firstOrNull()?.cid ?: parsed.cid
-                            qualityChoices = if (cookie.contains("SESSDATA=")) {
-                                withContext(Dispatchers.IO) {
-                                    api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities
-                                }
-                            } else {
-                                emptyList()
+                            qualityChoices = withContext(Dispatchers.IO) {
+                                api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities
                             }
                             quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
-                            status = if (cookie.isBlank()) "视频已解析。游客模式会尝试公开画质；高画质可能需要登录。" else "解析成功。已读取该视频和账号当前可用的画质。"
+                            status = if (cookie.isBlank()) "视频已解析，已尝试读取游客可用画质；部分资源可能要求登录。" else "解析成功。已读取该视频和当前 Cookie 可用的画质。"
                         } catch (e: Exception) {
                             status = e.message ?: "解析失败，请检查链接或 Cookie。"
                         } finally {
@@ -342,7 +252,7 @@ private fun BiliHome(
 
             Text("画质", style = MaterialTheme.typography.titleMedium)
             if (qualityChoices.isEmpty()) {
-                Text("暂未获取到该视频可用的画质列表。请先扫码登录，或确认视频是否有播放权限。")
+                Text("暂未获取到画质列表。游客模式下部分视频/接口可能要求登录，请检查视频权限或提供有效 Cookie。")
             } else {
                 qualityChoices.chunked(2).forEach { pair ->
                     Row(
@@ -367,11 +277,6 @@ private fun BiliHome(
                 enabled = !busy && video != null,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
-                    if (!cookie.contains("SESSDATA=")) {
-                        showLogin = true
-                        status = "下载需要有效的 B 站登录状态，请先扫码登录。"
-                        return@Button
-                    }
                     busy = true
                     status = "正在获取下载地址…"
                     onSaveCookie(cookie)
