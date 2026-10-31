@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.foundation.layout.size
 import coil.ImageLoader
 import coil.compose.AsyncImage
@@ -135,6 +136,7 @@ private fun BiliHome(
             label = { Text("B站 Cookie（可选，提升账号可用画质）") },
             placeholder = { Text("游客可留空；需要账号权限时可粘贴 Cookie") },
             modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
             minLines = 2,
             maxLines = 4
         )
@@ -157,11 +159,17 @@ private fun BiliHome(
                             }
                             video = parsed
                             selectedCid = parsed.pages.firstOrNull()?.cid ?: parsed.cid
-                            qualityChoices = withContext(Dispatchers.IO) {
-                                api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities
+                            try {
+                                qualityChoices = withContext(Dispatchers.IO) {
+                                    api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities
+                                }
+                                quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
+                                status = if (cookie.isBlank()) "视频已解析，已读取游客可用画质；部分资源可能要求登录。" else "解析成功。已读取该视频和当前 Cookie 可用的画质。"
+                            } catch (qualityError: Exception) {
+                                qualityChoices = emptyList()
+                                quality = 80
+                                status = "视频信息已解析，但画质列表暂时读取失败：${qualityError.message ?: "可继续尝试下载"}。"
                             }
-                            quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
-                            status = if (cookie.isBlank()) "视频已解析，已尝试读取游客可用画质；部分资源可能要求登录。" else "解析成功。已读取该视频和当前 Cookie 可用的画质。"
                         } catch (e: Exception) {
                             status = e.message ?: "解析失败，请检查链接或 Cookie。"
                         } finally {
