@@ -77,28 +77,45 @@ class BiliApi {
 
     fun extractVideoInput(input: String): Pair<String, String> {
         val value = input.trim()
-        Regex("(?i)BV[0-9A-Za-z]{10}").find(value)?.value?.let { return "bvid" to it }
-        Regex("(?i)(?:^|[/?:=&])av\\s*(\\d+)").find(value)?.groupValues?.get(1)?.let { return "aid" to it }
-        Regex("^\\s*(\\d+)\\s*$").matchEntire(value)?.groupValues?.get(1)?.let { return "aid" to it }
-        if (value.contains("b23.tv") || value.contains("bili2233.cn")) {
-            val short = if (value.startsWith("http")) value else "https://$value"
-            val req = Request.Builder().url(short).header("User-Agent", USER_AGENT).get().build()
+        if (value.isBlank()) error("请输入 BV、AV 或 B站视频链接")
+        Regex("(?i)^BV[0-9A-Za-z]{10}$").matchEntire(value)?.value?.let { return "bvid" to it }
+        Regex("(?i)^av\\s*(\\d+)$").matchEntire(value)?.groupValues?.get(1)?.let { return "aid" to it }
+        Regex("^\\d+$").matchEntire(value)?.value?.let { return "aid" to it }
+
+        val candidate = if (value.startsWith("http://", true) || value.startsWith("https://", true)) value else "https://$value"
+        val parsed = runCatching { candidate.toHttpUrl() }.getOrElse {
+            error("视频链接格式无效")
+        }
+        fun isAllowedBiliHost(host: String): Boolean =
+            host == "bilibili.com" || host.endsWith(".bilibili.com") ||
+                host == "b23.tv" || host == "www.b23.tv" ||
+                host == "bili2233.cn" || host == "www.bili2233.cn"
+
+        if (!isAllowedBiliHost(parsed.host)) {
+            error("仅支持 Bilibili 官方域名及 b23.tv 短链")
+        }
+
+        var resolvedPath = parsed.encodedPath
+        if (parsed.host == "b23.tv" || parsed.host == "www.b23.tv" ||
+            parsed.host == "bili2233.cn" || parsed.host == "www.bili2233.cn") {
+            val req = Request.Builder().url(parsed).header("User-Agent", USER_AGENT).get().build()
             client.newCall(req).execute().use { response ->
-                val target = response.request.url.toString()
-                Regex("(?i)BV[0-9A-Za-z]{10}").find(target)?.value?.let { return "bvid" to it }
-                Regex("(?i)/video/av(\\d+)").find(target)?.groupValues?.get(1)?.let { return "aid" to it }
-                val html = response.body?.string().orEmpty()
-                Regex("(?i)BV[0-9A-Za-z]{10}").find(html)?.value?.let { return "bvid" to it }
+                val finalUrl = response.request.url
+                if (!isAllowedBiliHost(finalUrl.host)) {
+                    error("短链跳转到了非 B站官方域名，已阻止解析")
+                }
+                resolvedPath = finalUrl.encodedPath
+                val body = response.body?.string().orEmpty()
+                Regex("(?i)BV[0-9A-Za-z]{10}").find(resolvedPath)?.value?.let { return "bvid" to it }
+                Regex("(?i)/video/av(\\d+)").find(resolvedPath)?.groupValues?.get(1)?.let { return "aid" to it }
+                Regex("(?i)BV[0-9A-Za-z]{10}").find(body)?.value?.let { return "bvid" to it }
             }
         }
-        val parsed = runCatching { (if (value.startsWith("http")) value else "https://$value").toHttpUrl() }.getOrNull()
-        if (parsed != null && parsed.host.endsWith("bilibili.com")) {
-            Regex("(?i)BV[0-9A-Za-z]{10}").find(parsed.encodedPath)?.value?.let { return "bvid" to it }
-            Regex("(?i)av(\\d+)").find(parsed.encodedPath)?.groupValues?.get(1)?.let { return "aid" to it }
-        }
-        error("无法识别视频地址，请输入 BV、AV、B站视频链接或 b23.tv 短链")
-    }
 
+        Regex("(?i)BV[0-9A-Za-z]{10}").find(resolvedPath)?.value?.let { return "bvid" to it }
+        Regex("(?i)/video/av(\\d+)").find(resolvedPath)?.groupValues?.get(1)?.let { return "aid" to it }
+        error("无法从链接中识别视频 ID，请检查是否为有效的 B站视频链接")
+    }
     fun getVideoInfo(input: String, cookie: String = ""): VideoInfo {
         val (kind, id) = extractVideoInput(input)
         val query = if (kind == "bvid") "bvid=${encode(id)}" else "aid=${encode(id)}"
