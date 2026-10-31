@@ -3,6 +3,7 @@ package com.example.bilidownload.api
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -87,5 +88,3 @@ class BiliLoginManager {
         const val UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36"
     }
 }
-
-private fun String.toHttpUrl(): HttpUrl = HttpUrl.get(this)
