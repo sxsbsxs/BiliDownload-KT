@@ -20,6 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import coil.compose.AsyncImage
 import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.api.BiliLoginManager
@@ -173,6 +175,7 @@ private fun HomePage(
     onOpenProfile: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var info by remember { mutableStateOf<VideoInfo?>(null) }
     var selectedPage by remember { mutableIntStateOf(0) }
     var allPages by remember { mutableStateOf(false) }
@@ -208,7 +211,7 @@ private fun HomePage(
                 selectedPage = 0
                 allPages = false
                 subtitleTracks = emptyList()
-                selectedSubtitleLanguage = ''
+                selectedSubtitleLanguage = ""
                 try {
                     val streams = withContext(Dispatchers.IO) { api.getPlayStreams(normalized, pages.first().cid, 127, cookie) }
                     qualities = streams.acceptedQualities
@@ -280,57 +283,13 @@ private fun HomePage(
         if (busy) return
         val pages = if (allPages) video.pages else listOfNotNull(currentPage)
         if (pages.isEmpty()) { status = "请先选择有效分P"; return }
-        busy = true; cancelFlag = false; progress = 0f; status = "准备下载…"
-        scope.launch {
-            val failures = mutableListOf<String>()
-            val successes = mutableListOf<String>()
-            try {
-                pages.forEachIndexed { index, page ->
-                    if (cancelFlag) return@forEachIndexed
-                    try {
-                        val fileResult = withContext(Dispatchers.IO) {
-                            when (mode) {
-                                SaveMode.VIDEO -> downloader.downloadVideo(
-                                    api, video, page.cid, chosenQuality?.quality ?: quality, cookie,
-                                    onProgress = { done, total ->
-                                        val within = if (total > 0) done.toFloat() / total else 0f
-                                        progress = ((index + within) / pages.size * 100f).coerceIn(0f, 100f)
-                                    },
-                                    isCancelled = { cancelFlag }
-                                )
-                                SaveMode.COVER -> {
-                                    val ext = when {
-                                        video.coverUrl.contains(".gif", true) -> "gif"
-                                        video.coverUrl.contains(".webp", true) -> "webp"
-                                        video.coverUrl.contains(".png", true) -> "png"
-                                        else -> "jpg"
-                                    }
-                                    downloader.downloadBytes(video.coverUrl, "${video.bvid}_cover.$ext", cookie)
-                                }
-                                SaveMode.DANMAKU -> downloader.downloadBytes(
-                                    "https://comment.bilibili.com/${page.cid}.xml",
-                                    "${video.bvid}_P${page.page}_danmaku.xml", cookie
-                                )
-                                SaveMode.SUBTITLE -> {
-                                    val tracks = api.getSubtitleTracks(video, page.cid, cookie)
-                                    val track = tracks.firstOrNull { it.language == selectedSubtitleLanguage }
-                                        ?: tracks.firstOrNull() ?: error("该分P没有公开字幕")
-                                    val srt = api.downloadSubtitle(track, cookie)
-                                    downloader.saveText("${video.bvid}_P${page.page}.srt", srt)
-                                }
-                            }
-                        }
-                        successes += fileResult
-                    } catch (e: Exception) { failures += "P${page.page}: ${e.message}" }
-                }
-                progress = if (successes.isNotEmpty()) 100f else progress
-                status = when {
-                    cancelFlag -> "下载已取消。已完成文件：${successes.size}"
-                    failures.isNotEmpty() -> "完成 ${successes.size} 项，失败 ${failures.size} 项：${failures.joinToString("；").take(500)}"
-                    else -> "下载完成：${successes.size} 个文件已导出到 Download/bilibilidl。"
-                }
-                taskKey++
-            } finally { busy = false }
+        runCatching {
+            DownloadWork.enqueue(context, video, pages, chosenQuality?.quality ?: quality, mode.name, selectedSubtitleLanguage)
+        }.onSuccess {
+            status = "下载任务已加入后台队列。离开页面后仍会继续，可在“已下载”查看任务。"
+            onOpenDownloads()
+        }.onFailure {
+            status = "创建后台下载任务失败：${it.message ?: "未知错误"}"
         }
     }
 
@@ -525,6 +484,33 @@ private fun DownloadsPage(downloader: StreamDownloader) {
             TextButton(onClick = { files = downloader.localFiles(); message = "" }) { Text("刷新") }
         }
         Text("共 ${files.size} 个文件 · ${formatBytes(files.sumOf { it.length() })}", style = MaterialTheme.typography.bodySmall)
+        var workInfos by remember { mutableStateOf(emptyList<WorkInfo>()) }
+        LaunchedEffect(Unit) {
+            val manager = WorkManager.getInstance(context)
+            while (true) {
+                workInfos = runCatching { manager.getWorkInfosByTag(DownloadWork.TAG).get() }.getOrDefault(emptyList())
+                delay(1000)
+            }
+        }
+        val visibleTasks = workInfos.filter { it.state != WorkInfo.State.SUCCEEDED && it.state != WorkInfo.State.CANCELLED }
+        if (visibleTasks.isNotEmpty()) Card {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("后台下载任务", fontWeight = FontWeight.Bold)
+                visibleTasks.forEach { work ->
+                    val title = work.progress.getString(DownloadWork.KEY_TITLE) ?: "B站下载任务"
+                    val percent = work.progress.getInt(DownloadWork.KEY_PROGRESS, 0)
+                    val message = work.progress.getString(DownloadWork.KEY_MESSAGE)
+                        ?: if (work.state == WorkInfo.State.ENQUEUED) "排队中" else work.state.name
+                    Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    LinearProgressIndicator(progress = percent / 100f, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("$message · $percent%", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { WorkManager.getInstance(context).cancelWorkById(work.id) },
+                            enabled = work.state == WorkInfo.State.RUNNING || work.state == WorkInfo.State.ENQUEUED) { Text("取消") }
+                    }
+                }
+            }
+        }
         if (message.isNotBlank()) Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         if (files.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("这里还空空的。解析并下载后，文件会显示在这里。") }
