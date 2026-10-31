@@ -158,7 +158,7 @@ class BiliApi {
         val value = input.trim()
         val bvid = Regex("(?i)BV[0-9A-Za-z]{10}").find(value)?.value
         if (bvid != null) return "bvid=$bvid"
-        val aid = Regex("(?i)(?:^|[/?:=&])av(\d+)").find(value)?.groupValues?.get(1)
+        val aid = Regex("(?i)(?:^|[/?:=&])av(\\d+)").find(value)?.groupValues?.get(1)
             ?: Regex("(?i)^\\s*(\\d+)\\s*$").matchEntire(value)?.groupValues?.get(1)
         if (!aid.isNullOrBlank() && aid.toLongOrNull() != null) return "aid=$aid"
         error("未识别到视频编号，请输入 BV 号、av号或完整 B站视频链接")
