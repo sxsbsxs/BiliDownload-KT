@@ -73,8 +73,11 @@ jobs:
                       name = item.filename.replace("\\", "/")
                       path = pathlib.PurePosixPath(name)
 
-                      if (path.is_absolute() or ".." in path.parts
-                          or (path.parts and ":" in path.parts[0])):
+                      if (
+                          path.is_absolute()
+                          or ".." in path.parts
+                          or (path.parts and ":" in path.parts[0])
+                      ):
                           raise Exception("Unsafe ZIP path: " + name)
 
                       if not path.parts:
@@ -125,6 +128,7 @@ jobs:
                       print("ZIP file list:")
                       for name in sorted(available):
                           print("  ", name)
+
                       raise Exception(
                           "Expected exactly one Android project root, found: "
                           + str(project_roots)
@@ -156,6 +160,7 @@ jobs:
                           shutil.copyfileobj(src, dst)
 
                       total += 1
+
                       if total > 20000:
                           raise Exception("Too many files in ZIP.")
 
@@ -181,6 +186,7 @@ jobs:
                 return 0
               fi
             done
+
             echo "MISSING: one of: $*"
             return 1
           }
@@ -195,12 +201,23 @@ jobs:
       - name: Commit extracted files
         id: commit
         if: steps.extract.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
 
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GITHUB_TOKEN is empty."
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git add -A
 
@@ -209,7 +226,7 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Auto extract BiliDownload-KT project"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git push origin "HEAD:${TARGET_BRANCH}"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -217,6 +234,7 @@ jobs:
         if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_BRANCH: ${{ github.event.inputs.branch || github.ref_name }}
         run: |
           set -euo pipefail
-          gh workflow run build-helper.yml --ref "${GITHUB_REF_NAME}"
+          gh workflow run build-helper.yml --ref "$TARGET_BRANCH"
