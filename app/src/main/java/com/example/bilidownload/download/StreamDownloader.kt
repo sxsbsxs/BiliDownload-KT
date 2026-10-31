@@ -220,7 +220,7 @@ class StreamDownloader(private val context: Context) {
         val folder = File(context.filesDir, "downloads").apply { if (!exists()) mkdirs() }
         val title = info.title.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]+"), "_")
             .trim().take(100).ifBlank { "bilibili_video" }
-        val stamp = if (taskId.isNotBlank()) taskId.take(12) else SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val stamp = if (taskId.isNotBlank()) "${taskId.take(8)}_${cid}" else SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val output = if (taskId.isNotBlank()) File(folder, "${title}_${stamp}.mp4") else uniqueFile(folder, "${title}_${stamp}.mp4")
         val http = OkHttpClient.Builder().connectTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS).followRedirects(true).build()
