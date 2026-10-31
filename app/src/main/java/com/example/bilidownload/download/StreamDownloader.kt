@@ -234,7 +234,10 @@ class StreamDownloader(private val context: Context) {
                     val meta = File(part.parentFile, part.name + ".meta")
                     var offset = if (part.exists()) part.length() else 0L
                     val savedMeta = runCatching { org.json.JSONObject(meta.readText()) }.getOrNull()
-                    if (offset > 0L && savedMeta?.optString("url") != url) {
+                    val savedValidator = savedMeta?.optString("etag").orEmpty()
+                        .ifBlank { savedMeta?.optString("last_modified").orEmpty() }
+                    if (offset > 0L && (savedMeta == null ||
+                            (savedMeta.optString("url") != url && savedValidator.isBlank()))) {
                         part.delete(); meta.delete(); offset = 0L
                     }
                     val builder = Request.Builder().url(url)
@@ -245,12 +248,18 @@ class StreamDownloader(private val context: Context) {
                     if (normalized.isNotBlank()) builder.header("Cookie", normalized)
                     if (offset > 0) {
                         builder.header("Range", "bytes=$offset-")
-                        val validator = savedMeta?.optString("etag").orEmpty().ifBlank { savedMeta?.optString("last_modified").orEmpty() }
-                        if (validator.isNotBlank()) builder.header("If-Range", validator)
+                        if (savedValidator.isNotBlank()) builder.header("If-Range", savedValidator)
                     }
                     http.newCall(builder.get().build()).execute().use { response ->
                         if (offset > 0 && response.code != 206) {
                             part.delete(); meta.delete(); offset = 0
+                        }
+                        val responseValidator = response.header("ETag").orEmpty()
+                            .ifBlank { response.header("Last-Modified").orEmpty() }
+                        if (offset > 0 && response.code == 206 && savedValidator.isNotBlank() &&
+                            responseValidator.isNotBlank() && responseValidator != savedValidator) {
+                            part.delete(); meta.delete()
+                            error("远端文件已变化，已清除旧断点，请重试")
                         }
                         if (offset > 0 && response.code == 206 &&
                             !response.header("Content-Range").orEmpty().startsWith("bytes $offset-")) {
