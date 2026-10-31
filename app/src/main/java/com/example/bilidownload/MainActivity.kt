@@ -9,11 +9,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.delay
 import android.os.Bundle
-import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,7 +33,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -50,10 +47,7 @@ import com.example.bilidownload.api.BiliApi
 import com.example.bilidownload.download.StreamDownloader
 import com.example.bilidownload.model.VideoInfo
 import com.example.bilidownload.security.CookieVault
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -107,9 +101,6 @@ private fun BiliHome(
     var qrKey by remember { mutableStateOf("") }
     var loginMessage by remember { mutableStateOf("点击获取 B 站官方扫码二维码。") }
     var loginBusy by remember { mutableStateOf(false) }
-    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var qrTicket by remember { mutableStateOf<BiliApi.QrLoginTicket?>(null) }
-    var qrStatus by remember { mutableStateOf("点击下方按钮获取官方扫码二维码") }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("粘贴 B站视频链接或 BV 号开始解析。") }
     val scope = rememberCoroutineScope()
@@ -218,8 +209,8 @@ private fun BiliHome(
         OutlinedTextField(
             value = input,
             onValueChange = { input = it },
-            label = { Text("视频链接 / BV 号") },
-            placeholder = { Text("https://www.bilibili.com/video/BV...") },
+            label = { Text("视频链接 / BV号 / AV号") },
+            placeholder = { Text("https://www.bilibili.com/video/BV... 或 av号") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
@@ -252,18 +243,12 @@ private fun BiliHome(
                             }
                             video = parsed
                             selectedCid = parsed.pages.firstOrNull()?.cid ?: parsed.cid
-                            qualityChoices = try {
-                                withContext(Dispatchers.IO) { api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities }
-                            } catch (_: Exception) {
-                                try {
-                                    withContext(Dispatchers.IO) { api.getPlayStreams(parsed, selectedCid, 80, cookie).acceptedQualities }
-                                } catch (_: Exception) {
-                                    listOf(
-                                        com.example.bilidownload.model.StreamChoice(80, "1080P（尝试）"),
-                                        com.example.bilidownload.model.StreamChoice(64, "720P（尝试）"),
-                                        com.example.bilidownload.model.StreamChoice(32, "480P（尝试）")
-                                    )
+                            qualityChoices = if (cookie.contains("SESSDATA=")) {
+                                withContext(Dispatchers.IO) {
+                                    api.getPlayStreams(parsed, selectedCid, 127, cookie).acceptedQualities
                                 }
+                            } else {
+                                emptyList()
                             }
                             quality = qualityChoices.maxByOrNull { it.quality }?.quality ?: 80
                             status = if (cookie.isBlank()) "视频已解析。游客模式会尝试公开画质；高画质可能需要登录。" else "解析成功。已读取该视频和账号当前可用的画质。"
@@ -382,6 +367,11 @@ private fun BiliHome(
                 enabled = !busy && video != null,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
+                    if (!cookie.contains("SESSDATA=")) {
+                        showLogin = true
+                        status = "下载需要有效的 B 站登录状态，请先扫码登录。"
+                        return@Button
+                    }
                     busy = true
                     status = "正在获取下载地址…"
                     onSaveCookie(cookie)
